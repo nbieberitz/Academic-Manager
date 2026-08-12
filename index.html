@@ -715,8 +715,10 @@
             <label class="check-label" style="margin-bottom:14px;"><input type="checkbox" id="gcalPullToggle" checked> Show my other Google Calendar events here</label>
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
               <button class="btn btn-primary btn-sm" id="btnGcalSyncNow">Sync now</button>
+              <button class="btn btn-ghost btn-sm" id="btnGcalSyncFullYear">Sync entire school year</button>
               <button class="btn btn-ghost btn-sm" id="btnGcalDisconnect">Disconnect</button>
             </div>
+            <p class="hint" style="margin-top:8px;margin-bottom:0;">"Sync entire school year" pushes School blocks for every school day between the first and last day set above, instead of just the window below. Handy right after connecting, or after changing your school year dates.</p>
           </div>
         </div>
         <div class="settings-section" style="margin-bottom:0;">
@@ -2630,7 +2632,7 @@ function buildSchoolDayEventBody(dateStr, startTime, endTime){
 }
 function gcalEventSig(body){ return body.summary+'|'+body.start.dateTime+'|'+body.end.dateTime; }
 
-function buildDesiredGcalItems(){
+function buildDesiredGcalItems(opts){
   const cmap = classesMap();
   const items = {};
   state.assignments.forEach(a=>{
@@ -2638,10 +2640,18 @@ function buildDesiredGcalItems(){
     const body = buildAssignmentEventBody(a, cmap);
     items[a.id] = { body, sig: gcalEventSig(body) };
   });
-  const days = clamp(parseInt(state.googleCalendar.windowDays,10)||30, 7, 90);
   const today = new Date(); today.setHours(0,0,0,0);
-  for(let i=0;i<days;i++){
-    const d = new Date(today); d.setDate(d.getDate()+i);
+  const sy = state.schoolYear || {};
+  let rangeStart = today, rangeEnd;
+  if(opts && opts.fullSchoolYear && sy.startDate && sy.endDate){
+    // Whole configured school year, past and future — used by "Sync entire school year".
+    rangeStart = new Date(sy.startDate+'T00:00:00');
+    rangeEnd = new Date(sy.endDate+'T00:00:00');
+  } else {
+    const days = clamp(parseInt(state.googleCalendar.windowDays,10)||30, 7, 90);
+    rangeEnd = new Date(today); rangeEnd.setDate(rangeEnd.getDate()+days-1);
+  }
+  for(let d=new Date(rangeStart); d<=rangeEnd; d.setDate(d.getDate()+1)){
     const dStr = dateKey(d);
     const dayClasses = classesOnDate(dStr);
     if(dayClasses.length){
@@ -2658,11 +2668,20 @@ function buildDesiredGcalItems(){
 /* ===================== Google Calendar: sync ===================== */
 let gcalSyncInProgress = false;
 let gcalSyncQueued = false;
+let gcalQueuedOpts = null;
 let gcalProgressText = '';
 
 function updateGcalProgress(done, total){
   gcalProgressText = total ? (done+'/'+total) : '';
   renderGcalSettings();
+}
+
+// A "school_YYYY-MM-DD" key for a date before today. Once a school day is in the
+// past it's a record of what happened, not something to keep re-deriving — a
+// key like this simply not showing up in a given sync's "desired" set (e.g. it's
+// outside that sync's window) doesn't mean it should be deleted.
+function isPastSchoolDayKey(key){
+  return key.indexOf('school_')===0 && key.slice('school_'.length) < dateKey(new Date());
 }
 
 async function applyGcalDiff(desired){
@@ -2673,7 +2692,7 @@ async function applyGcalDiff(desired){
     if(!existing) toCreate.push(key);
     else if(existing.sig !== desired[key].sig) toUpdate.push(key);
   });
-  Object.keys(map).forEach(key=>{ if(!desired[key]) toDelete.push(key); });
+  Object.keys(map).forEach(key=>{ if(!desired[key] && !isPastSchoolDayKey(key)) toDelete.push(key); });
 
   const total = toCreate.length + toUpdate.length + toDelete.length;
   let done = 0;
@@ -2735,8 +2754,12 @@ async function pullExternalGcalEvents(){
     }));
 }
 
-async function runCalendarSync(interactive){
-  if(gcalSyncInProgress){ gcalSyncQueued = true; return; }
+async function runCalendarSync(interactive, opts){
+  if(gcalSyncInProgress){
+    gcalSyncQueued = true;
+    if(opts && opts.fullSchoolYear) gcalQueuedOpts = {fullSchoolYear:true};
+    return;
+  }
   if(!isGcalConfigured()){
     if(interactive) showToast('Google Calendar isn\'t set up yet — see the Settings tab for setup steps.');
     return;
@@ -2746,7 +2769,7 @@ async function runCalendarSync(interactive){
   renderGcalSettings();
   try{
     await getValidGcalToken(interactive);
-    const desired = buildDesiredGcalItems();
+    const desired = buildDesiredGcalItems(opts);
     await applyGcalDiff(desired);
     await pullExternalGcalEvents();
     state.googleCalendar.lastSyncedAt = Date.now();
@@ -2763,7 +2786,11 @@ async function runCalendarSync(interactive){
   persistState();
   renderGcalSettings();
   renderCalendar();
-  if(gcalSyncQueued){ gcalSyncQueued = false; runCalendarSync(false); }
+  if(gcalSyncQueued){
+    gcalSyncQueued = false;
+    const queuedOpts = gcalQueuedOpts; gcalQueuedOpts = null;
+    runCalendarSync(false, queuedOpts);
+  }
 }
 
 let gcalSyncTimer = null;
@@ -2813,6 +2840,7 @@ function renderGcalSettings(){
     document.getElementById('gcalAutoSyncToggle').checked = gc.autoSync!==false;
     document.getElementById('gcalPullToggle').checked = gc.pullEnabled!==false;
     document.getElementById('btnGcalSyncNow').disabled = gcalSyncInProgress;
+    document.getElementById('btnGcalSyncFullYear').disabled = gcalSyncInProgress;
   }
 }
 
@@ -2829,6 +2857,18 @@ document.getElementById('btnGcalConnect').addEventListener('click', async ()=>{
   }
 });
 document.getElementById('btnGcalSyncNow').addEventListener('click', ()=>runCalendarSync(true));
+document.getElementById('btnGcalSyncFullYear').addEventListener('click', ()=>{
+  const sy = state.schoolYear || {};
+  if(!sy.startDate || !sy.endDate){
+    showToast('Set both a first and last day of school in the School year section above before syncing the whole year.');
+    return;
+  }
+  if(sy.endDate < sy.startDate){
+    showToast('Last day of school is before the first day — fix the School year dates above first.');
+    return;
+  }
+  runCalendarSync(true, {fullSchoolYear:true});
+});
 document.getElementById('btnGcalDisconnect').addEventListener('click', ()=>{
   document.getElementById('confirmTitle').textContent = 'Disconnect Google Calendar?';
   document.getElementById('confirmBody').textContent = 'Flightpath will stop syncing. Events already created in Google Calendar are left as-is — reconnecting later will pick right back up without duplicating them.';
