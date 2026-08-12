@@ -415,6 +415,15 @@
   .cal-chip{font-size:10px;padding:2px 5px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
   .cal-chip.done{opacity:.5;text-decoration:line-through;}
   .cal-more{font-size:9.5px;color:var(--text-faint);font-family:var(--font-m);padding-left:5px;}
+  .cal-day-right{display:flex;align-items:center;gap:4px;}
+  .cal-day.is-break{opacity:.5;}
+  .cal-day.is-changed{border-color:var(--purple);box-shadow:0 0 0 1px rgba(185,140,224,.25) inset;}
+  .cal-badge{font-size:8px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;padding:1px 4px;border-radius:4px;font-family:var(--font-m);flex:none;}
+  .cal-badge-off{background:rgba(225,89,106,.16);color:var(--red);}
+  .cal-badge-mod{background:rgba(185,140,224,.18);color:var(--purple);}
+  .day-banner{display:flex;align-items:center;gap:7px;padding:9px 12px;border-radius:var(--radius-s);font-size:12.5px;font-weight:600;margin-bottom:14px;}
+  .day-banner.off{background:rgba(225,89,106,.1);color:var(--red);border:1px solid rgba(225,89,106,.22);}
+  .day-banner.mod{background:rgba(185,140,224,.1);color:var(--purple);border:1px solid rgba(185,140,224,.22);}
   .day-class-row{display:flex;align-items:center;gap:11px;background:var(--panel-2);border:1px solid var(--border-soft);border-radius:var(--radius-s);padding:10px 12px;margin-bottom:8px;}
 
   /* ---------- responsive ---------- */
@@ -618,6 +627,48 @@
           <p class="hint" id="schoolYearError" style="display:none;color:var(--red);">Last day should be on or after the first day.</p>
         </div>
         <div class="settings-section">
+          <h3>Breaks &amp; days off</h3>
+          <p class="settings-desc">Days with no school — holidays, breaks, snow days. Classes and "due in class" are skipped on these dates.</p>
+          <div id="breaksList"></div>
+          <div class="inline-form" id="breakForm">
+            <div class="field-row">
+              <div class="field"><label>Label</label><input type="text" id="breakLabelInput" placeholder="e.g. Thanksgiving Break"></div>
+            </div>
+            <div class="field-row">
+              <div class="field"><label>First day</label><input type="date" id="breakStartInput"></div>
+              <div class="field"><label>Last day</label><input type="date" id="breakEndInput"></div>
+            </div>
+            <div class="form-error" id="breakFormError">Give it a label and a valid date range.</div>
+            <div style="display:flex;gap:10px;">
+              <button class="btn btn-primary btn-sm" id="breakFormSave">Save break</button>
+              <button class="btn btn-ghost btn-sm" id="breakFormCancel">Cancel</button>
+            </div>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnNewBreak">+ Add break</button>
+        </div>
+        <div class="settings-section">
+          <h3>Schedule changes</h3>
+          <p class="settings-desc">One-off days where your classes or times don't match the regular pattern — assemblies, half days, rotating blocks.</p>
+          <div id="scheduleChangeList"></div>
+          <div class="inline-form" id="scheduleChangeForm">
+            <div class="field-row">
+              <div class="field"><label>Date</label><input type="date" id="schedChangeDateInput"></div>
+              <div class="field"><label>Note (optional)</label><input type="text" id="schedChangeNoteInput" placeholder="e.g. Assembly schedule"></div>
+            </div>
+            <div class="field">
+              <label>Classes meeting that day</label>
+              <div id="schedChangePeriods"></div>
+              <p class="hint" id="schedChangeNoClassesHint" style="display:none;margin-top:0;">Add a class first in the Classes tab.</p>
+            </div>
+            <div class="form-error" id="schedChangeFormError">Pick a date, and give every checked class both a start and end time.</div>
+            <div style="display:flex;gap:10px;">
+              <button class="btn btn-primary btn-sm" id="schedChangeFormSave">Save schedule change</button>
+              <button class="btn btn-ghost btn-sm" id="schedChangeFormCancel">Cancel</button>
+            </div>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="btnNewScheduleChange">+ Add schedule change</button>
+        </div>
+        <div class="settings-section">
           <h3>Assignment types</h3>
           <p class="settings-desc">Shown in the type dropdown when logging an assignment.</p>
           <div class="chip-list" id="typeChips"></div>
@@ -806,6 +857,7 @@
       <button class="icon-btn" data-close><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="modal-body">
+      <div id="dayDetailBanner"></div>
       <div class="settings-section">
         <h3 style="font-size:13px;">Classes</h3>
         <div id="dayDetailClasses"></div>
@@ -932,15 +984,33 @@ function periodForDayKey(cls, dk){
 }
 function classMeetsOnDate(cls, dateStr){
   if(!cls || !dateStr) return false;
-  if(!inSchoolYear(dateStr)) return false;
-  return !!periodForDayKey(cls, dateKeyDowKey(dateStr));
+  return !!resolveInClassPeriod(cls, dateStr);
+}
+// A break (day off) covering the given date, if any — see state.breaks.
+// Date ranges are inclusive on both ends.
+function breakForDate(dateStr){
+  if(!dateStr) return null;
+  return (state.breaks||[]).find(b=>b.startDate && dateStr>=b.startDate && dateStr<=(b.endDate||b.startDate)) || null;
+}
+// A one-off schedule change for the exact date, if any — see state.scheduleChanges.
+function scheduleChangeForDate(dateStr){
+  if(!dateStr) return null;
+  return (state.scheduleChanges||[]).find(s=>s.date===dateStr) || null;
 }
 // Resolves the "due in class" time for a given class + due date. Returns the
 // period covering that weekday, or null if the class doesn't meet that day
-// (or the date falls outside the school year).
+// (date falls outside the school year, lands on a break, or is a schedule-
+// change day that doesn't include this class). A schedule change on the date
+// overrides the class's normal weekly pattern entirely.
 function resolveInClassPeriod(cls, dateStr){
   if(!cls || !dateStr) return null;
   if(!inSchoolYear(dateStr)) return null;
+  if(breakForDate(dateStr)) return null;
+  const change = scheduleChangeForDate(dateStr);
+  if(change){
+    const p = change.periods.find(p=>p.classId===cls.id);
+    return p ? {startTime:p.startTime, endTime:p.endTime} : null;
+  }
   return periodForDayKey(cls, dateKeyDowKey(dateStr));
 }
 function earliestStartTime(cls){
@@ -965,6 +1035,8 @@ let state = {
   locations: [],
   assignments: [],
   schoolYear: { startDate:'', endDate:'' },
+  breaks: [],
+  scheduleChanges: [],
   ui: { view:'assignments', sort:'priority', showCompleted:false }
 };
 
@@ -982,6 +1054,8 @@ function defaultState(){
     ],
     assignments: [],
     schoolYear: { startDate:'', endDate:'' },
+    breaks: [],
+    scheduleChanges: [],
     ui: { view:'assignments', sort:'priority', showCompleted:false }
   };
 }
@@ -1035,6 +1109,8 @@ async function loadState(){
       const parsed = JSON.parse(raw);
       if(parsed && parsed.classes){
         if(!parsed.schoolYear) parsed.schoolYear = { startDate:'', endDate:'' };
+        if(!parsed.breaks) parsed.breaks = [];
+        if(!parsed.scheduleChanges) parsed.scheduleChanges = [];
         parsed.classes.forEach(migrateClass);
         return parsed;
       }
@@ -1389,6 +1465,242 @@ function renderSettings(){
     '<span class="chip">'+escapeHtml(l.name)+'<button data-del-loc="'+l.id+'" title="Remove">×</button></span>'
   ).join('');
   locWrap.querySelectorAll('[data-del-loc]').forEach(b=>b.addEventListener('click',()=>removeCategory('locations', b.dataset.delLoc)));
+
+  renderBreaksList();
+  renderScheduleChangesList();
+}
+
+/* ===================== settings: breaks & days off ===================== */
+function formatDateRangeShort(s,e){
+  if(!e || e===s) return formatDateShort(s);
+  return formatDateShort(s)+' – '+formatDateShort(e);
+}
+function renderBreaksList(){
+  const wrap = document.getElementById('breaksList');
+  const breaks = (state.breaks||[]).slice().sort((a,b)=>a.startDate.localeCompare(b.startDate));
+  if(!breaks.length){
+    wrap.innerHTML = '<p class="hint" style="margin:0 0 10px;">No breaks added yet.</p>';
+    return;
+  }
+  wrap.innerHTML = breaks.map(b=>
+    '<div class="day-class-row" data-id="'+b.id+'">'+
+      '<span class="dot" style="background:var(--red);color:var(--red);"></span>'+
+      '<div class="class-row-main">'+
+        '<span class="class-name">'+escapeHtml(b.label||'Day off')+'</span>'+
+        '<div class="class-block-line mono">'+escapeHtml(formatDateRangeShort(b.startDate,b.endDate))+'</div>'+
+      '</div>'+
+      '<div class="class-actions">'+
+        '<button class="icon-btn" data-edit-break="'+b.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>'+
+        '<button class="icon-btn danger" data-del-break="'+b.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>'+
+      '</div>'+
+    '</div>'
+  ).join('');
+  wrap.querySelectorAll('[data-edit-break]').forEach(btn=>btn.addEventListener('click',()=>openBreakForm(btn.dataset.editBreak)));
+  wrap.querySelectorAll('[data-del-break]').forEach(btn=>btn.addEventListener('click',()=>deleteBreak(btn.dataset.delBreak)));
+}
+let editingBreakId = null;
+function openBreakForm(editId){
+  editingBreakId = editId || null;
+  document.getElementById('breakForm').classList.add('open');
+  document.getElementById('breakFormError').classList.remove('show');
+  if(editId){
+    const b = byId(state.breaks, editId);
+    document.getElementById('breakLabelInput').value = b.label||'';
+    document.getElementById('breakStartInput').value = b.startDate||'';
+    document.getElementById('breakEndInput').value = b.endDate||'';
+  } else {
+    document.getElementById('breakLabelInput').value = '';
+    document.getElementById('breakStartInput').value = '';
+    document.getElementById('breakEndInput').value = '';
+  }
+  document.getElementById('breakLabelInput').focus();
+}
+function closeBreakForm(){
+  document.getElementById('breakForm').classList.remove('open');
+  editingBreakId = null;
+}
+document.getElementById('btnNewBreak').addEventListener('click', ()=>openBreakForm(null));
+document.getElementById('breakFormCancel').addEventListener('click', closeBreakForm);
+document.getElementById('breakFormSave').addEventListener('click', ()=>{
+  const label = document.getElementById('breakLabelInput').value.trim();
+  const start = document.getElementById('breakStartInput').value;
+  const end = document.getElementById('breakEndInput').value || start;
+  const errEl = document.getElementById('breakFormError');
+  if(!label || !start || (end && end<start)){
+    errEl.textContent = !label ? 'Give the break a label.' : !start ? 'Pick at least a first day.' : "Last day can't be before the first day.";
+    errEl.classList.add('show');
+    return;
+  }
+  errEl.classList.remove('show');
+  if(!state.breaks) state.breaks = [];
+  if(editingBreakId){
+    const b = byId(state.breaks, editingBreakId);
+    b.label=label; b.startDate=start; b.endDate=end;
+    showToast('Break updated');
+  } else {
+    state.breaks.push({id:uid(), label, startDate:start, endDate:end});
+    showToast('Break added');
+  }
+  closeBreakForm();
+  scheduleSave(); render();
+});
+function deleteBreak(id){
+  state.breaks = (state.breaks||[]).filter(x=>x.id!==id);
+  scheduleSave(); render();
+  showToast('Break removed');
+}
+
+/* ===================== settings: schedule changes ===================== */
+function renderScheduleChangesList(){
+  const wrap = document.getElementById('scheduleChangeList');
+  const cmap = classesMap();
+  const changes = (state.scheduleChanges||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+  if(!changes.length){
+    wrap.innerHTML = '<p class="hint" style="margin:0 0 10px;">No schedule changes added yet.</p>';
+    return;
+  }
+  wrap.innerHTML = changes.map(s=>{
+    const names = s.periods.map(p=>cmap[p.classId]?cmap[p.classId].name:null).filter(Boolean);
+    const summary = names.length ? names.join(', ') : 'No classes meet';
+    return '<div class="day-class-row" data-id="'+s.id+'">'+
+      '<span class="dot" style="background:var(--purple);color:var(--purple);"></span>'+
+      '<div class="class-row-main">'+
+        '<span class="class-name">'+escapeHtml(formatDateShort(s.date))+(s.note?' — '+escapeHtml(s.note):'')+'</span>'+
+        '<div class="class-block-line">'+escapeHtml(summary)+'</div>'+
+      '</div>'+
+      '<div class="class-actions">'+
+        '<button class="icon-btn" data-edit-sched="'+s.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>'+
+        '<button class="icon-btn danger" data-del-sched="'+s.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+  wrap.querySelectorAll('[data-edit-sched]').forEach(btn=>btn.addEventListener('click',()=>openScheduleChangeForm(btn.dataset.editSched)));
+  wrap.querySelectorAll('[data-del-sched]').forEach(btn=>btn.addEventListener('click',()=>deleteScheduleChange(btn.dataset.delSched)));
+}
+let editingScheduleChangeId = null;
+let schedChangePeriods = [];
+function renderSchedChangePeriods(){
+  const wrap = document.getElementById('schedChangePeriods');
+  const hint = document.getElementById('schedChangeNoClassesHint');
+  if(!state.classes.length){
+    wrap.innerHTML = '';
+    hint.style.display = '';
+    return;
+  }
+  hint.style.display = 'none';
+  wrap.innerHTML = schedChangePeriods.map((p,i)=>{
+    const cls = byId(state.classes, p.classId);
+    if(!cls) return '';
+    return '<div class="period-block" data-idx="'+i+'">'+
+      '<div class="period-block-head">'+
+        '<label class="check-label"><input type="checkbox" class="sched-meets" data-idx="'+i+'"'+(p.meets?' checked':'')+'>'+
+          '<span class="dot" style="background:'+cls.color+';color:'+cls.color+';margin-top:0;"></span>'+escapeHtml(cls.name)+
+        '</label>'+
+      '</div>'+
+      (p.meets ? '<div class="period-time-row">'+
+        '<div class="field" style="margin-bottom:0;"><label>Starts</label><input type="time" class="sched-start" data-idx="'+i+'" value="'+(p.startTime||'')+'"></div>'+
+        '<div class="field" style="margin-bottom:0;"><label>Ends</label><input type="time" class="sched-end" data-idx="'+i+'" value="'+(p.endTime||'')+'"></div>'+
+      '</div>' : '')+
+    '</div>';
+  }).join('');
+
+  wrap.querySelectorAll('.sched-meets').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      const idx = +cb.dataset.idx;
+      const entry = schedChangePeriods[idx];
+      entry.meets = cb.checked;
+      if(cb.checked && !entry.startTime){
+        const dateVal = document.getElementById('schedChangeDateInput').value;
+        const cls = byId(state.classes, entry.classId);
+        const per = (dateVal && cls) ? periodForDayKey(cls, dateKeyDowKey(dateVal)) : null;
+        if(per){ entry.startTime = per.startTime; entry.endTime = per.endTime; }
+      }
+      renderSchedChangePeriods();
+    });
+  });
+  wrap.querySelectorAll('.sched-start').forEach(inp=>{
+    inp.addEventListener('change', ()=>{ schedChangePeriods[+inp.dataset.idx].startTime = inp.value; });
+  });
+  wrap.querySelectorAll('.sched-end').forEach(inp=>{
+    inp.addEventListener('change', ()=>{ schedChangePeriods[+inp.dataset.idx].endTime = inp.value; });
+  });
+}
+function openScheduleChangeForm(editId){
+  editingScheduleChangeId = editId || null;
+  document.getElementById('scheduleChangeForm').classList.add('open');
+  document.getElementById('schedChangeFormError').classList.remove('show');
+  if(editId){
+    const s = byId(state.scheduleChanges, editId);
+    document.getElementById('schedChangeDateInput').value = s.date||'';
+    document.getElementById('schedChangeNoteInput').value = s.note||'';
+    schedChangePeriods = state.classes.map(c=>{
+      const existing = s.periods.find(p=>p.classId===c.id);
+      return {classId:c.id, meets: !!existing, startTime: existing?existing.startTime:'', endTime: existing?existing.endTime:''};
+    });
+  } else {
+    document.getElementById('schedChangeDateInput').value = '';
+    document.getElementById('schedChangeNoteInput').value = '';
+    schedChangePeriods = state.classes.map(c=>({classId:c.id, meets:false, startTime:'', endTime:''}));
+  }
+  renderSchedChangePeriods();
+  document.getElementById('schedChangeDateInput').focus();
+}
+function closeScheduleChangeForm(){
+  document.getElementById('scheduleChangeForm').classList.remove('open');
+  editingScheduleChangeId = null;
+  schedChangePeriods = [];
+}
+document.getElementById('btnNewScheduleChange').addEventListener('click', ()=>{
+  if(!state.classes.length){ showToast('Add a class first'); return; }
+  openScheduleChangeForm(null);
+});
+document.getElementById('schedChangeFormCancel').addEventListener('click', closeScheduleChangeForm);
+document.getElementById('schedChangeDateInput').addEventListener('change', (e)=>{
+  const dateVal = e.target.value;
+  schedChangePeriods.forEach(p=>{
+    if(p.meets && !p.startTime){
+      const cls = byId(state.classes, p.classId);
+      const per = (dateVal && cls) ? periodForDayKey(cls, dateKeyDowKey(dateVal)) : null;
+      if(per){ p.startTime = per.startTime; p.endTime = per.endTime; }
+    }
+  });
+  renderSchedChangePeriods();
+});
+document.getElementById('schedChangeFormSave').addEventListener('click', ()=>{
+  const date = document.getElementById('schedChangeDateInput').value;
+  const note = document.getElementById('schedChangeNoteInput').value.trim();
+  const errEl = document.getElementById('schedChangeFormError');
+  const meeting = schedChangePeriods.filter(p=>p.meets);
+  const allValid = meeting.every(p=>p.startTime && p.endTime);
+  if(!date || !allValid){
+    errEl.textContent = !date ? 'Pick a date.' : 'Every checked class needs both a start and end time.';
+    errEl.classList.add('show');
+    return;
+  }
+  if(!state.scheduleChanges) state.scheduleChanges = [];
+  const dup = state.scheduleChanges.find(s=>s.date===date && s.id!==editingScheduleChangeId);
+  if(dup){
+    errEl.textContent = "There's already a schedule change for that date — edit it instead of adding a new one.";
+    errEl.classList.add('show');
+    return;
+  }
+  errEl.classList.remove('show');
+  const periods = meeting.map(p=>({classId:p.classId, startTime:p.startTime, endTime:p.endTime}));
+  if(editingScheduleChangeId){
+    const s = byId(state.scheduleChanges, editingScheduleChangeId);
+    s.date=date; s.note=note; s.periods=periods;
+    showToast('Schedule change updated');
+  } else {
+    state.scheduleChanges.push({id:uid(), date, note, periods});
+    showToast('Schedule change added');
+  }
+  closeScheduleChangeForm();
+  scheduleSave(); render();
+});
+function deleteScheduleChange(id){
+  state.scheduleChanges = (state.scheduleChanges||[]).filter(x=>x.id!==id);
+  scheduleSave(); render();
+  showToast('Schedule change removed');
 }
 
 function removeCategory(kind, id){
@@ -1414,7 +1726,17 @@ function inSchoolYear(key){
   return true;
 }
 // Classes (with their resolved period for that specific date) that meet on a given date, sorted by start time.
+// A break wipes the day; a schedule change replaces the normal weekly pattern for that date.
 function classesOnDate(dateStr){
+  if(breakForDate(dateStr)) return [];
+  const change = scheduleChangeForDate(dateStr);
+  if(change){
+    const cmap = classesMap();
+    return change.periods
+      .filter(p=>cmap[p.classId] && p.startTime && p.endTime)
+      .map(p=>({ cls:cmap[p.classId], period:{startTime:p.startTime, endTime:p.endTime} }))
+      .sort((a,b)=>timeToMinutes(a.period.startTime)-timeToMinutes(b.period.startTime));
+  }
   return state.classes
     .map(c=>({ cls:c, period: resolveInClassPeriod(c, dateStr) }))
     .filter(x=>x.period)
@@ -1444,6 +1766,8 @@ function renderCalendar(){
     const key = dateKey(d);
     const inMonth = d.getMonth()===month;
     const isToday = key===todayS;
+    const brk = breakForDate(key);
+    const change = !brk ? scheduleChangeForDate(key) : null;
     const dayClasses = classesOnDate(key);
     const dayAssignments = (assignByDate[key]||[]).slice().sort((a,b)=>
       assignmentDueTimeStr(a,cmap).localeCompare(assignmentDueTimeStr(b,cmap)));
@@ -1461,9 +1785,12 @@ function renderCalendar(){
     if(dayClasses.length){
       classDots = '<div class="cal-classdots">'+dayClasses.map(x=>'<span class="cal-dot" style="background:'+x.cls.color+';color:'+x.cls.color+';"></span>').join('')+'</div>';
     }
+    let badge = '';
+    if(brk) badge = '<span class="cal-badge cal-badge-off" title="'+escapeHtml(brk.label||'Day off')+'">Off</span>';
+    else if(change) badge = '<span class="cal-badge cal-badge-mod" title="Modified schedule">Mod</span>';
 
-    html += '<div class="cal-day'+(inMonth?'':' other-month')+(isToday?' today':'')+'" data-date="'+key+'">'+
-      '<div class="cal-day-top"><span class="cal-day-num">'+d.getDate()+'</span>'+classDots+'</div>'+
+    html += '<div class="cal-day'+(inMonth?'':' other-month')+(isToday?' today':'')+(brk?' is-break':'')+(change?' is-changed':'')+'" data-date="'+key+'">'+
+      '<div class="cal-day-top"><span class="cal-day-num">'+d.getDate()+'</span><div class="cal-day-right">'+badge+classDots+'</div></div>'+
       '<div class="cal-chips">'+chips+(extra>0?'<div class="cal-more">+'+extra+' more</div>':'')+'</div>'+
     '</div>';
   }
@@ -1489,8 +1816,16 @@ function openDayDetail(key){
 
   const cmap = classesMap();
   const inSY = inSchoolYear(key);
-  const classesToday = inSY ? classesOnDate(key) : [];
-  let noClassMsg = inSY ? 'No classes scheduled — add a class in the Classes tab.' : 'No classes — outside the school year.';
+  const brk = breakForDate(key);
+  const change = !brk ? scheduleChangeForDate(key) : null;
+  const classesToday = classesOnDate(key);
+  let noClassMsg = brk ? 'No classes — marked as a day off.' :
+    inSY ? 'No classes scheduled — add a class in the Classes tab.' : 'No classes — outside the school year.';
+
+  const bannerEl = document.getElementById('dayDetailBanner');
+  bannerEl.innerHTML = brk ? '<div class="day-banner off">Day off — '+escapeHtml(brk.label||'Break')+'</div>' :
+    change ? '<div class="day-banner mod">Modified schedule'+(change.note?' — '+escapeHtml(change.note):'')+'</div>' : '';
+
   const classesEl = document.getElementById('dayDetailClasses');
   classesEl.innerHTML = classesToday.length ? classesToday.map(x=>
     '<div class="day-class-row">'+
@@ -1849,13 +2184,19 @@ function updateInClassHint(){
     return;
   }
   const period = resolveInClassPeriod(cls, dueDate);
+  const brk = breakForDate(dueDate);
+  const change = !brk ? scheduleChangeForDate(dueDate) : null;
   if(period){
     hintEl.style.display = '';
-    hintEl.textContent = 'Uses "'+cls.name+'"\'s '+DAY_LABELS_LONG[dateKeyDowKey(dueDate)]+' period: '+formatTime12(period.startTime)+'.';
+    hintEl.textContent = change ?
+      'Uses "'+cls.name+'"\'s schedule-change time for '+formatDateShort(dueDate)+': '+formatTime12(period.startTime)+'.' :
+      'Uses "'+cls.name+'"\'s '+DAY_LABELS_LONG[dateKeyDowKey(dueDate)]+' period: '+formatTime12(period.startTime)+'.';
     warnEl.classList.remove('show');
   } else {
     hintEl.style.display = 'none';
-    const reason = !inSchoolYear(dueDate) ? 'that date falls outside the school year' :
+    const reason = brk ? 'that date is marked as a day off ("'+(brk.label||'break')+'")' :
+      !inSchoolYear(dueDate) ? 'that date falls outside the school year' :
+      change ? '"'+cls.name+'" isn\'t on the schedule-change list for that date' :
       '"'+cls.name+'" doesn\'t meet on '+DAY_LABELS_LONG[dateKeyDowKey(dueDate)]+'s';
     warnEl.textContent = "⚠ Can't set this due \"in class\" — "+reason+". Pick a different due date, choose another class, or switch to a specific time.";
     warnEl.classList.add('show');
