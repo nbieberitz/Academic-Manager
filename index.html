@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --bg:#0e121a;
@@ -421,6 +422,7 @@
   .cal-badge{font-size:8px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;padding:1px 4px;border-radius:4px;font-family:var(--font-m);flex:none;}
   .cal-badge-off{background:rgba(225,89,106,.16);color:var(--red);}
   .cal-badge-mod{background:rgba(185,140,224,.18);color:var(--purple);}
+  .cal-badge-gcal{background:rgba(91,157,242,.18);color:var(--blue);}
   .day-banner{display:flex;align-items:center;gap:7px;padding:9px 12px;border-radius:var(--radius-s);font-size:12.5px;font-weight:600;margin-bottom:14px;}
   .day-banner.off{background:rgba(225,89,106,.1);color:var(--red);border:1px solid rgba(225,89,106,.22);}
   .day-banner.mod{background:rgba(185,140,224,.1);color:var(--purple);border:1px solid rgba(185,140,224,.22);}
@@ -686,6 +688,32 @@
             <button class="btn btn-sm" id="addLocationBtn">Add</button>
           </div>
         </div>
+        <div class="settings-section">
+          <h3>Google Calendar</h3>
+          <p class="settings-desc">Two-way sync with your primary Google Calendar: your assignments and class schedule get pushed there, and your other events on that calendar show up here as read-only entries.</p>
+          <p class="hint" id="gcalNotConfigured" style="display:none;">Not set up yet — this needs a Google OAuth client ID pasted into the code. See the setup comment near the top of the script (search for <code>GOOGLE_CALENDAR_CLIENT_ID</code>).</p>
+          <div id="gcalDisconnected">
+            <button class="btn btn-primary btn-sm" id="btnGcalConnect">Connect Google Calendar</button>
+          </div>
+          <div id="gcalConnected" style="display:none;">
+            <div class="day-class-row">
+              <span class="dot" style="background:var(--blue);color:var(--blue);"></span>
+              <div class="class-row-main">
+                <span class="class-name" id="gcalStatusLine">Connected</span>
+                <div class="class-block-line" id="gcalSyncDetail"></div>
+              </div>
+            </div>
+            <div class="field-row" style="max-width:420px;margin-top:12px;">
+              <div class="field"><label>Sync this many days ahead</label><input type="number" id="gcalWindowInput" min="7" max="90" value="30"></div>
+            </div>
+            <label class="check-label" style="margin-bottom:10px;"><input type="checkbox" id="gcalAutoSyncToggle" checked> Auto-sync when I add or change things</label>
+            <label class="check-label" style="margin-bottom:14px;"><input type="checkbox" id="gcalPullToggle" checked> Show my other Google Calendar events here</label>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button class="btn btn-primary btn-sm" id="btnGcalSyncNow">Sync now</button>
+              <button class="btn btn-ghost btn-sm" id="btnGcalDisconnect">Disconnect</button>
+            </div>
+          </div>
+        </div>
         <div class="settings-section" style="margin-bottom:0;">
           <h3>Data</h3>
           <p class="settings-desc">Everything is saved automatically as you go.</p>
@@ -862,6 +890,10 @@
         <h3 style="font-size:13px;">Classes</h3>
         <div id="dayDetailClasses"></div>
       </div>
+      <div class="settings-section" id="dayDetailExternalWrap" style="display:none;">
+        <h3 style="font-size:13px;">Personal (Google Calendar)</h3>
+        <div id="dayDetailExternal"></div>
+      </div>
       <div class="settings-section" style="margin-bottom:0;">
         <h3 style="font-size:13px;">Due this day</h3>
         <div id="dayDetailAssignments" class="list"></div>
@@ -924,6 +956,28 @@ const StorageAdapter = {
   }
 };
 const STORAGE_KEY = 'flightpath_data_v1'; // unused key kept for API compatibility
+
+/* ===================== Google Calendar sync ===================== */
+// SETUP (one-time, in Google Cloud Console — the same project your Firebase
+// config above belongs to):
+//   1. APIs & Services → Library → enable "Google Calendar API".
+//   2. APIs & Services → Credentials → Create credentials → OAuth client ID
+//      → Application type "Web application".
+//   3. Under "Authorized JavaScript origins" add this site's exact origin,
+//      e.g. https://nbieberitz.github.io (no trailing slash/path).
+//   4. APIs & Services → OAuth consent screen → Audience → add yourself
+//      under "Test users" (keeps it in Testing mode so you don't need
+//      Google's app-verification review for a personal single-user tool).
+//   5. Paste the Client ID it gives you below.
+const GOOGLE_CALENDAR_CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const GCAL_BASE = 'https://www.googleapis.com/calendar/v3';
+function isGcalConfigured(){
+  return typeof GOOGLE_CALENDAR_CLIENT_ID==='string' && !!GOOGLE_CALENDAR_CLIENT_ID && !GOOGLE_CALENDAR_CLIENT_ID.includes('YOUR_CLIENT_ID');
+}
+function defaultGcalState(){
+  return { connected:false, autoSync:true, pullEnabled:true, windowDays:30, eventMap:{}, externalEvents:[], lastSyncedAt:null, lastSyncStatus:null, lastSyncError:null };
+}
 
 /* ===================== helpers ===================== */
 function uid(){ return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,8); }
@@ -1037,6 +1091,7 @@ let state = {
   schoolYear: { startDate:'', endDate:'' },
   breaks: [],
   scheduleChanges: [],
+  googleCalendar: defaultGcalState(),
   ui: { view:'assignments', sort:'priority', showCompleted:false }
 };
 
@@ -1056,6 +1111,7 @@ function defaultState(){
     schoolYear: { startDate:'', endDate:'' },
     breaks: [],
     scheduleChanges: [],
+    googleCalendar: defaultGcalState(),
     ui: { view:'assignments', sort:'priority', showCompleted:false }
   };
 }
@@ -1085,13 +1141,19 @@ function assignmentTimeLabel(a, cmap){
 
 /* ===================== persistence ===================== */
 let saveTimer = null;
-function scheduleSave(){
+function persistState(){
   setSaveStatus('saving');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async ()=>{
     const ok = await StorageAdapter.set(STORAGE_KEY, JSON.stringify(state));
     setSaveStatus(ok ? 'saved' : 'idle');
   }, 350);
+}
+function scheduleSave(){
+  persistState();
+  if(state.googleCalendar && state.googleCalendar.connected && state.googleCalendar.autoSync!==false){
+    scheduleCalendarSync();
+  }
 }
 function setSaveStatus(kind){
   const dot = document.getElementById('saveDot');
@@ -1111,6 +1173,7 @@ async function loadState(){
         if(!parsed.schoolYear) parsed.schoolYear = { startDate:'', endDate:'' };
         if(!parsed.breaks) parsed.breaks = [];
         if(!parsed.scheduleChanges) parsed.scheduleChanges = [];
+        if(!parsed.googleCalendar) parsed.googleCalendar = defaultGcalState();
         parsed.classes.forEach(migrateClass);
         return parsed;
       }
@@ -1468,6 +1531,7 @@ function renderSettings(){
 
   renderBreaksList();
   renderScheduleChangesList();
+  renderGcalSettings();
 }
 
 /* ===================== settings: breaks & days off ===================== */
@@ -1788,9 +1852,12 @@ function renderCalendar(){
     let badge = '';
     if(brk) badge = '<span class="cal-badge cal-badge-off" title="'+escapeHtml(brk.label||'Day off')+'">Off</span>';
     else if(change) badge = '<span class="cal-badge cal-badge-mod" title="Modified schedule">Mod</span>';
+    const extToday = externalEventsOnDate(key);
+    let extBadge = '';
+    if(extToday.length) extBadge = '<span class="cal-badge cal-badge-gcal" title="'+extToday.length+' Google Calendar event'+(extToday.length>1?'s':'')+'">'+extToday.length+'</span>';
 
     html += '<div class="cal-day'+(inMonth?'':' other-month')+(isToday?' today':'')+(brk?' is-break':'')+(change?' is-changed':'')+'" data-date="'+key+'">'+
-      '<div class="cal-day-top"><span class="cal-day-num">'+d.getDate()+'</span><div class="cal-day-right">'+badge+classDots+'</div></div>'+
+      '<div class="cal-day-top"><span class="cal-day-num">'+d.getDate()+'</span><div class="cal-day-right">'+badge+classDots+extBadge+'</div></div>'+
       '<div class="cal-chips">'+chips+(extra>0?'<div class="cal-more">+'+extra+' more</div>':'')+'</div>'+
     '</div>';
   }
@@ -1834,6 +1901,17 @@ function openDayDetail(key){
       '<span class="class-time mono">'+formatTime12(x.period.startTime)+' – '+formatTime12(x.period.endTime)+'</span>'+
     '</div>'
   ).join('') : '<p class="hint" style="margin:0;">'+noClassMsg+'</p>';
+
+  const extToday = externalEventsOnDate(key);
+  const extWrap = document.getElementById('dayDetailExternalWrap');
+  extWrap.style.display = extToday.length ? '' : 'none';
+  document.getElementById('dayDetailExternal').innerHTML = extToday.map(e=>
+    '<div class="day-class-row">'+
+      '<span class="dot" style="background:var(--blue);color:var(--blue);"></span>'+
+      '<span class="class-name">'+escapeHtml(e.title)+'</span>'+
+      '<span class="class-time mono">'+(e.allDay ? 'All day' : formatTime12(e.start.slice(11,16))+' – '+formatTime12(e.end.slice(11,16)))+'</span>'+
+    '</div>'
+  ).join('');
 
   const dueToday = state.assignments.filter(a=>a.dueDate===key).sort((a,b)=>
     assignmentDueTimeStr(a,cmap).localeCompare(assignmentDueTimeStr(b,cmap)));
@@ -2391,6 +2469,338 @@ function toggleComplete(id){
   a.completed = !a.completed;
   scheduleSave(); render();
 }
+
+/* ===================== Google Calendar: OAuth token ===================== */
+let gcalTokenClient = null;
+let gcalAccessToken = null;
+let gcalTokenExpiresAt = 0;
+
+function requestGcalToken(interactive){
+  return new Promise((resolve, reject)=>{
+    if(!window.google || !google.accounts || !google.accounts.oauth2){
+      reject(new Error('Google\'s sign-in library hasn\'t loaded yet — check your connection and try again.'));
+      return;
+    }
+    if(!gcalTokenClient){
+      gcalTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CALENDAR_CLIENT_ID,
+        scope: GCAL_SCOPE,
+        callback: ()=>{}
+      });
+    }
+    gcalTokenClient.callback = (resp)=>{
+      if(resp && resp.error){ reject(new Error('Google Calendar authorization was '+resp.error+'.')); return; }
+      gcalAccessToken = resp.access_token;
+      gcalTokenExpiresAt = Date.now() + (Number(resp.expires_in||3600)*1000) - 60000;
+      resolve(gcalAccessToken);
+    };
+    gcalTokenClient.error_callback = (err)=>{ reject(new Error(err && err.message ? err.message : 'Google Calendar authorization failed.')); };
+    try{
+      gcalTokenClient.requestAccessToken(interactive ? {} : { prompt:'none' });
+    }catch(e){ reject(e); }
+  });
+}
+async function getValidGcalToken(interactive){
+  if(gcalAccessToken && Date.now() < gcalTokenExpiresAt) return gcalAccessToken;
+  return requestGcalToken(interactive);
+}
+
+/* ===================== Google Calendar: REST helpers ===================== */
+async function gcalError(res){
+  let msg = 'Google Calendar request failed ('+res.status+')';
+  try{ const j = await res.json(); if(j.error && j.error.message) msg = j.error.message; }catch(e){}
+  return new Error(msg);
+}
+async function gcalFetch(path, opts, interactive){
+  opts = opts || {};
+  const token = await getValidGcalToken(interactive);
+  const res = await fetch(GCAL_BASE+path, Object.assign({}, opts, {
+    headers: Object.assign({ 'Authorization':'Bearer '+token, 'Content-Type':'application/json' }, opts.headers||{})
+  }));
+  if(res.status===401 && interactive){
+    gcalAccessToken = null;
+    const token2 = await getValidGcalToken(true);
+    const res2 = await fetch(GCAL_BASE+path, Object.assign({}, opts, {
+      headers: Object.assign({ 'Authorization':'Bearer '+token2, 'Content-Type':'application/json' }, opts.headers||{})
+    }));
+    if(!res2.ok) throw await gcalError(res2);
+    return res2.status===204 ? null : res2.json();
+  }
+  if(!res.ok) throw await gcalError(res);
+  return res.status===204 ? null : res.json();
+}
+function gcalCreateEvent(body){ return gcalFetch('/calendars/primary/events', {method:'POST', body:JSON.stringify(body)}, true); }
+function gcalUpdateEvent(id, body){ return gcalFetch('/calendars/primary/events/'+encodeURIComponent(id), {method:'PATCH', body:JSON.stringify(body)}, true); }
+function gcalDeleteEvent(id){
+  return gcalFetch('/calendars/primary/events/'+encodeURIComponent(id), {method:'DELETE'}, true).catch(()=>{ /* already gone — fine */ });
+}
+
+// Small concurrency-limited task runner so a big first sync doesn't fire
+// hundreds of requests at once.
+function makePool(limit){
+  let active = 0; const queue = [];
+  function next(){
+    if(active>=limit || !queue.length) return;
+    active++;
+    const job = queue.shift();
+    job.fn().then(v=>{ active--; job.resolve(v); next(); }, e=>{ active--; job.reject(e); next(); });
+  }
+  return function run(fn){
+    return new Promise((resolve,reject)=>{ queue.push({fn,resolve,reject}); next(); });
+  };
+}
+
+/* ===================== Google Calendar: building events ===================== */
+function toGcalDateTime(dateStr, timeStr){ return new Date(dateStr+'T'+(timeStr||'00:00')+':00').toISOString(); }
+
+function buildAssignmentEventBody(a, cmap){
+  const cls = cmap[a.classId];
+  const timeStr = assignmentDueTimeStr(a, cmap);
+  const startISO = toGcalDateTime(a.dueDate, timeStr);
+  const durMin = (a.estMinutes && a.estMinutes>0) ? a.estMinutes : 15;
+  const endISO = new Date(new Date(startISO).getTime() + durMin*60000).toISOString();
+  const type = byId(state.types, a.typeId);
+  let desc = 'Flightpath assignment'+(type?' · '+type.name:'');
+  if(a.notes) desc += '\n\n'+a.notes;
+  desc += '\n\n(Managed by Flightpath — edits made here may be overwritten on the next sync.)';
+  return {
+    summary: (cls?cls.name+': ':'')+a.title,
+    description: desc,
+    start: { dateTime: startISO },
+    end: { dateTime: endISO },
+    extendedProperties: { private: { flightpathManaged:'true', flightpathType:'assignment', flightpathId:a.id } }
+  };
+}
+function buildClassInstanceEventBody(cls, dateStr, period){
+  return {
+    summary: cls.name,
+    description: 'Flightpath class period\n\n(Managed by Flightpath — edits made here may be overwritten on the next sync.)',
+    start: { dateTime: toGcalDateTime(dateStr, period.startTime) },
+    end: { dateTime: toGcalDateTime(dateStr, period.endTime) },
+    extendedProperties: { private: { flightpathManaged:'true', flightpathType:'class', flightpathId:cls.id+'_'+dateStr } }
+  };
+}
+function gcalEventSig(body){ return body.summary+'|'+body.start.dateTime+'|'+body.end.dateTime; }
+
+function buildDesiredGcalItems(){
+  const cmap = classesMap();
+  const items = {};
+  state.assignments.forEach(a=>{
+    if(!a.dueDate || !a.classId || !cmap[a.classId]) return;
+    const body = buildAssignmentEventBody(a, cmap);
+    items[a.id] = { body, sig: gcalEventSig(body) };
+  });
+  const days = clamp(parseInt(state.googleCalendar.windowDays,10)||30, 7, 90);
+  const today = new Date(); today.setHours(0,0,0,0);
+  for(let i=0;i<days;i++){
+    const d = new Date(today); d.setDate(d.getDate()+i);
+    const dStr = dateKey(d);
+    classesOnDate(dStr).forEach(x=>{
+      const key = x.cls.id+'_'+dStr;
+      const body = buildClassInstanceEventBody(x.cls, dStr, x.period);
+      items[key] = { body, sig: gcalEventSig(body) };
+    });
+  }
+  return items;
+}
+
+/* ===================== Google Calendar: sync ===================== */
+let gcalSyncInProgress = false;
+let gcalSyncQueued = false;
+let gcalProgressText = '';
+
+function updateGcalProgress(done, total){
+  gcalProgressText = total ? (done+'/'+total) : '';
+  renderGcalSettings();
+}
+
+async function applyGcalDiff(desired){
+  const map = state.googleCalendar.eventMap || {};
+  const toCreate = [], toUpdate = [], toDelete = [];
+  Object.keys(desired).forEach(key=>{
+    const existing = map[key];
+    if(!existing) toCreate.push(key);
+    else if(existing.sig !== desired[key].sig) toUpdate.push(key);
+  });
+  Object.keys(map).forEach(key=>{ if(!desired[key]) toDelete.push(key); });
+
+  const total = toCreate.length + toUpdate.length + toDelete.length;
+  let done = 0;
+  updateGcalProgress(0, total);
+  const pool = makePool(6);
+
+  await Promise.all(toDelete.map(key=>pool(async ()=>{
+    await gcalDeleteEvent(map[key].id);
+    delete map[key];
+    updateGcalProgress(++done, total);
+  })));
+  await Promise.all(toCreate.map(key=>pool(async ()=>{
+    const ev = await gcalCreateEvent(desired[key].body);
+    map[key] = { id: ev.id, sig: desired[key].sig };
+    updateGcalProgress(++done, total);
+  })));
+  await Promise.all(toUpdate.map(key=>pool(async ()=>{
+    const ev = await gcalUpdateEvent(map[key].id, desired[key].body);
+    map[key] = { id: ev.id, sig: desired[key].sig };
+    updateGcalProgress(++done, total);
+  })));
+  state.googleCalendar.eventMap = map;
+}
+
+function externalEventsOnDate(dateStr){
+  return (state.googleCalendar.externalEvents||[]).filter(e=>{
+    const s = e.allDay ? e.start : e.start.slice(0,10);
+    return s===dateStr;
+  });
+}
+
+async function pullExternalGcalEvents(){
+  if(!state.googleCalendar.pullEnabled){ state.googleCalendar.externalEvents = []; return; }
+  const days = clamp(parseInt(state.googleCalendar.windowDays,10)||30, 7, 90);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const end = new Date(today); end.setDate(end.getDate()+days);
+  let items = [], pageToken = null;
+  do{
+    const params = new URLSearchParams({ timeMin: today.toISOString(), timeMax: end.toISOString(), singleEvents:'true', orderBy:'startTime', maxResults:'250' });
+    if(pageToken) params.set('pageToken', pageToken);
+    const res = await gcalFetch('/calendars/primary/events?'+params.toString(), {method:'GET'}, true);
+    items = items.concat(res.items||[]);
+    pageToken = res.nextPageToken || null;
+  } while(pageToken);
+
+  state.googleCalendar.externalEvents = items
+    .filter(e=>e.status!=='cancelled')
+    .filter(e=>!(e.extendedProperties && e.extendedProperties.private && e.extendedProperties.private.flightpathManaged==='true'))
+    .map(e=>({
+      id: e.id,
+      title: e.summary || '(untitled)',
+      start: (e.start && (e.start.dateTime||e.start.date)) || '',
+      end: (e.end && (e.end.dateTime||e.end.date)) || '',
+      allDay: !(e.start && e.start.dateTime)
+    }));
+}
+
+async function runCalendarSync(interactive){
+  if(gcalSyncInProgress){ gcalSyncQueued = true; return; }
+  if(!isGcalConfigured()){
+    if(interactive) showToast('Google Calendar isn\'t set up yet — see the Settings tab for setup steps.');
+    return;
+  }
+  if(!state.googleCalendar.connected) return;
+  gcalSyncInProgress = true;
+  renderGcalSettings();
+  try{
+    await getValidGcalToken(interactive);
+    const desired = buildDesiredGcalItems();
+    await applyGcalDiff(desired);
+    await pullExternalGcalEvents();
+    state.googleCalendar.lastSyncedAt = Date.now();
+    state.googleCalendar.lastSyncStatus = 'ok';
+    state.googleCalendar.lastSyncError = null;
+  }catch(e){
+    console.error('Google Calendar sync failed', e);
+    state.googleCalendar.lastSyncStatus = 'error';
+    state.googleCalendar.lastSyncError = e.message || 'Sync failed';
+    if(interactive) showToast('Google Calendar sync failed — see Settings for details.');
+  }
+  gcalSyncInProgress = false;
+  gcalProgressText = '';
+  persistState();
+  renderGcalSettings();
+  renderCalendar();
+  if(gcalSyncQueued){ gcalSyncQueued = false; runCalendarSync(false); }
+}
+
+let gcalSyncTimer = null;
+function scheduleCalendarSync(){
+  clearTimeout(gcalSyncTimer);
+  gcalSyncTimer = setTimeout(()=>{ runCalendarSync(false); }, 4000);
+}
+
+function formatRelativeSyncTime(ms){
+  if(!ms) return 'Not synced yet';
+  const mins = Math.round((Date.now()-ms)/60000);
+  if(mins<1) return 'Synced just now';
+  if(mins<60) return 'Synced '+mins+'m ago';
+  const hrs = Math.round(mins/60);
+  if(hrs<24) return 'Synced '+hrs+'h ago';
+  return 'Synced '+new Date(ms).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+}
+
+/* ===================== Google Calendar: settings UI ===================== */
+function renderGcalSettings(){
+  const gc = state.googleCalendar;
+  const configured = isGcalConfigured();
+  document.getElementById('gcalNotConfigured').style.display = configured ? 'none' : '';
+  document.getElementById('gcalDisconnected').style.display = (!gc.connected) ? '' : 'none';
+  document.getElementById('gcalConnected').style.display = gc.connected ? '' : 'none';
+  document.getElementById('btnGcalConnect').disabled = !configured;
+
+  if(gc.connected){
+    const email = currentUser ? (currentUser.email||'') : '';
+    document.getElementById('gcalStatusLine').textContent = 'Connected'+(email?' as '+email:'');
+    const detailEl = document.getElementById('gcalSyncDetail');
+    let detail;
+    if(gcalSyncInProgress){
+      detail = 'Syncing…'+(gcalProgressText ? ' '+gcalProgressText : '');
+      detailEl.style.color = '';
+    } else if(gc.lastSyncStatus==='error'){
+      detail = 'Last sync failed: '+(gc.lastSyncError||'unknown error');
+      detailEl.style.color = 'var(--red)';
+    } else {
+      detail = formatRelativeSyncTime(gc.lastSyncedAt);
+      detailEl.style.color = '';
+    }
+    detailEl.textContent = detail;
+    document.getElementById('gcalWindowInput').value = gc.windowDays||30;
+    document.getElementById('gcalAutoSyncToggle').checked = gc.autoSync!==false;
+    document.getElementById('gcalPullToggle').checked = gc.pullEnabled!==false;
+    document.getElementById('btnGcalSyncNow').disabled = gcalSyncInProgress;
+  }
+}
+
+document.getElementById('btnGcalConnect').addEventListener('click', async ()=>{
+  if(!isGcalConfigured()){ showToast('Add your Google OAuth client ID in the code first — see the setup comment near the top of the script.'); return; }
+  try{
+    await requestGcalToken(true);
+    state.googleCalendar.connected = true;
+    showToast('Google Calendar connected');
+    renderGcalSettings();
+    runCalendarSync(true);
+  }catch(e){
+    showToast(e.message || 'Could not connect to Google Calendar');
+  }
+});
+document.getElementById('btnGcalSyncNow').addEventListener('click', ()=>runCalendarSync(true));
+document.getElementById('btnGcalDisconnect').addEventListener('click', ()=>{
+  document.getElementById('confirmTitle').textContent = 'Disconnect Google Calendar?';
+  document.getElementById('confirmBody').textContent = 'Flightpath will stop syncing. Events already created in Google Calendar are left as-is — reconnecting later will pick right back up without duplicating them.';
+  document.getElementById('confirmActionBtn').onclick = ()=>{
+    if(gcalAccessToken){ try{ google.accounts.oauth2.revoke(gcalAccessToken, ()=>{}); }catch(e){} }
+    gcalAccessToken = null; gcalTokenExpiresAt = 0;
+    state.googleCalendar.connected = false;
+    state.googleCalendar.externalEvents = [];
+    closeOverlay('overlayConfirm');
+    persistState(); renderGcalSettings(); renderCalendar();
+    showToast('Google Calendar disconnected');
+  };
+  openOverlay('overlayConfirm');
+});
+document.getElementById('gcalWindowInput').addEventListener('change', (e)=>{
+  const v = clamp(parseInt(e.target.value,10)||30, 7, 90);
+  e.target.value = v;
+  state.googleCalendar.windowDays = v;
+  scheduleSave();
+});
+document.getElementById('gcalAutoSyncToggle').addEventListener('change', (e)=>{
+  state.googleCalendar.autoSync = e.target.checked;
+  persistState();
+});
+document.getElementById('gcalPullToggle').addEventListener('change', (e)=>{
+  state.googleCalendar.pullEnabled = e.target.checked;
+  if(!e.target.checked) state.googleCalendar.externalEvents = [];
+  persistState(); renderCalendar();
+});
 
 /* ===================== auth ===================== */
 async function loadAppForUser(){
