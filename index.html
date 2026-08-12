@@ -988,6 +988,7 @@ function defaultGcalState(){
 function uid(){ return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,8); }
 function clamp(n,lo,hi){ return Math.max(lo, Math.min(hi, n)); }
 function timeToMinutes(t){ if(!t) return 0; const [h,m] = t.split(':').map(Number); return h*60+m; }
+function minutesToTimeStr(mins){ return pad2(Math.floor(mins/60))+':'+pad2(mins%60); }
 function formatTime12(t){
   if(!t) return '';
   let [h,m] = t.split(':').map(Number);
@@ -2618,13 +2619,13 @@ function buildAssignmentEventBody(a, cmap){
     extendedProperties: { private: { flightpathManaged:'true', flightpathType:'assignment', flightpathId:a.id } }
   };
 }
-function buildClassInstanceEventBody(cls, dateStr, period){
+function buildSchoolDayEventBody(dateStr, startTime, endTime){
   return {
-    summary: cls.name,
-    description: 'Flightpath class period\n\n(Managed by Flightpath — edits made here may be overwritten on the next sync.)',
-    start: { dateTime: toGcalDateTime(dateStr, period.startTime) },
-    end: { dateTime: toGcalDateTime(dateStr, period.endTime) },
-    extendedProperties: { private: { flightpathManaged:'true', flightpathType:'class', flightpathId:cls.id+'_'+dateStr } }
+    summary: 'School',
+    description: 'Flightpath school day — first class start to last class end\n\n(Managed by Flightpath — edits made here may be overwritten on the next sync.)',
+    start: { dateTime: toGcalDateTime(dateStr, startTime) },
+    end: { dateTime: toGcalDateTime(dateStr, endTime) },
+    extendedProperties: { private: { flightpathManaged:'true', flightpathType:'school-day', flightpathId:'school_'+dateStr } }
   };
 }
 function gcalEventSig(body){ return body.summary+'|'+body.start.dateTime+'|'+body.end.dateTime; }
@@ -2633,7 +2634,7 @@ function buildDesiredGcalItems(){
   const cmap = classesMap();
   const items = {};
   state.assignments.forEach(a=>{
-    if(!a.dueDate || !a.classId || !cmap[a.classId]) return;
+    if(!a.dueDate || !a.classId || !cmap[a.classId] || a.completed) return;
     const body = buildAssignmentEventBody(a, cmap);
     items[a.id] = { body, sig: gcalEventSig(body) };
   });
@@ -2642,11 +2643,14 @@ function buildDesiredGcalItems(){
   for(let i=0;i<days;i++){
     const d = new Date(today); d.setDate(d.getDate()+i);
     const dStr = dateKey(d);
-    classesOnDate(dStr).forEach(x=>{
-      const key = x.cls.id+'_'+dStr;
-      const body = buildClassInstanceEventBody(x.cls, dStr, x.period);
+    const dayClasses = classesOnDate(dStr);
+    if(dayClasses.length){
+      const startMin = Math.min(...dayClasses.map(x=>timeToMinutes(x.period.startTime)));
+      const endMin = Math.max(...dayClasses.map(x=>timeToMinutes(x.period.endTime)));
+      const key = 'school_'+dStr;
+      const body = buildSchoolDayEventBody(dStr, minutesToTimeStr(startMin), minutesToTimeStr(endMin));
       items[key] = { body, sig: gcalEventSig(body) };
-    });
+    }
   }
   return items;
 }
