@@ -706,6 +706,11 @@
             <div class="field-row" style="max-width:420px;margin-top:12px;">
               <div class="field"><label>Sync this many days ahead</label><input type="number" id="gcalWindowInput" min="7" max="90" value="30"></div>
             </div>
+            <div class="field-row" style="max-width:420px;">
+              <div class="field"><label>Items synced per second</label><input type="number" id="gcalRateInput" min="0" max="100" value="0"></div>
+              <div class="field"><label>Pause when rate-limited (sec)</label><input type="number" id="gcalRatePauseInput" min="1" max="300" value="5"></div>
+            </div>
+            <p class="hint" style="margin-top:-8px;margin-bottom:14px;">0 items/sec = as fast as possible. If Google rate-limits the sync, it pauses and retries automatically.</p>
             <label class="check-label" style="margin-bottom:10px;"><input type="checkbox" id="gcalAutoSyncToggle" checked> Auto-sync when I add or change things</label>
             <label class="check-label" style="margin-bottom:14px;"><input type="checkbox" id="gcalPullToggle" checked> Show my other Google Calendar events here</label>
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -976,7 +981,7 @@ function isGcalConfigured(){
   return typeof GOOGLE_CALENDAR_CLIENT_ID==='string' && !!GOOGLE_CALENDAR_CLIENT_ID && !GOOGLE_CALENDAR_CLIENT_ID.includes('YOUR_CLIENT_ID');
 }
 function defaultGcalState(){
-  return { connected:false, autoSync:true, pullEnabled:true, windowDays:30, eventMap:{}, externalEvents:[], lastSyncedAt:null, lastSyncStatus:null, lastSyncError:null };
+  return { connected:false, autoSync:true, pullEnabled:true, windowDays:30, itemsPerSecond:0, rateLimitPauseSec:5, eventMap:{}, externalEvents:[], lastSyncedAt:null, lastSyncStatus:null, lastSyncError:null };
 }
 
 /* ===================== helpers ===================== */
@@ -2509,7 +2514,9 @@ async function getValidGcalToken(interactive){
 async function gcalError(res){
   let msg = 'Google Calendar request failed ('+res.status+')';
   try{ const j = await res.json(); if(j.error && j.error.message) msg = j.error.message; }catch(e){}
-  return new Error(msg);
+  const err = new Error(msg);
+  err.status = res.status;
+  return err;
 }
 async function gcalFetch(path, opts, interactive){
   opts = opts || {};
@@ -2548,6 +2555,46 @@ function makePool(limit){
   return function run(fn){
     return new Promise((resolve,reject)=>{ queue.push({fn,resolve,reject}); next(); });
   };
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+// Paces calls so at most `perSecond` sync operations START per second
+// (Settings > Google Calendar > "Items synced per second"). perSecond<=0
+// disables pacing — items still go through makePool's concurrency cap above,
+// which is what "as fast as possible" falls back to.
+function makeRateGate(perSecond){
+  if(!perSecond || perSecond<=0) return function gate(){ return Promise.resolve(); };
+  const intervalMs = 1000/perSecond;
+  let nextAt = 0;
+  return function gate(){
+    const now = Date.now();
+    const runAt = Math.max(now, nextAt);
+    nextAt = runAt + intervalMs;
+    const wait = runAt - now;
+    return wait>0 ? sleep(wait) : Promise.resolve();
+  };
+}
+
+// Runs fn(), and if Google responds with 429 (rate limited), pauses for the
+// configured "Pause when rate-limited" duration and retries. Capped so a
+// persistent rate-limit can't hang a sync forever.
+async function withRateLimitRetry(fn){
+  const maxAttempts = 20;
+  for(let attempt=1; ; attempt++){
+    try{
+      return await fn();
+    }catch(e){
+      if(e && e.status===429 && attempt<maxAttempts){
+        const pauseSec = clamp(parseInt(state.googleCalendar.rateLimitPauseSec,10)||5, 1, 300);
+        gcalProgressText = 'rate limited — pausing '+pauseSec+'s…';
+        renderGcalSettings();
+        await sleep(pauseSec*1000);
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 /* ===================== Google Calendar: building events ===================== */
@@ -2628,19 +2675,23 @@ async function applyGcalDiff(desired){
   let done = 0;
   updateGcalProgress(0, total);
   const pool = makePool(6);
+  const gate = makeRateGate(parseInt(state.googleCalendar.itemsPerSecond,10)||0);
 
   await Promise.all(toDelete.map(key=>pool(async ()=>{
-    await gcalDeleteEvent(map[key].id);
+    await gate();
+    await withRateLimitRetry(()=>gcalDeleteEvent(map[key].id));
     delete map[key];
     updateGcalProgress(++done, total);
   })));
   await Promise.all(toCreate.map(key=>pool(async ()=>{
-    const ev = await gcalCreateEvent(desired[key].body);
+    await gate();
+    const ev = await withRateLimitRetry(()=>gcalCreateEvent(desired[key].body));
     map[key] = { id: ev.id, sig: desired[key].sig };
     updateGcalProgress(++done, total);
   })));
   await Promise.all(toUpdate.map(key=>pool(async ()=>{
-    const ev = await gcalUpdateEvent(map[key].id, desired[key].body);
+    await gate();
+    const ev = await withRateLimitRetry(()=>gcalUpdateEvent(map[key].id, desired[key].body));
     map[key] = { id: ev.id, sig: desired[key].sig };
     updateGcalProgress(++done, total);
   })));
@@ -2663,7 +2714,7 @@ async function pullExternalGcalEvents(){
   do{
     const params = new URLSearchParams({ timeMin: today.toISOString(), timeMax: end.toISOString(), singleEvents:'true', orderBy:'startTime', maxResults:'250' });
     if(pageToken) params.set('pageToken', pageToken);
-    const res = await gcalFetch('/calendars/primary/events?'+params.toString(), {method:'GET'}, true);
+    const res = await withRateLimitRetry(()=>gcalFetch('/calendars/primary/events?'+params.toString(), {method:'GET'}, true));
     items = items.concat(res.items||[]);
     pageToken = res.nextPageToken || null;
   } while(pageToken);
@@ -2753,6 +2804,8 @@ function renderGcalSettings(){
     }
     detailEl.textContent = detail;
     document.getElementById('gcalWindowInput').value = gc.windowDays||30;
+    document.getElementById('gcalRateInput').value = gc.itemsPerSecond||0;
+    document.getElementById('gcalRatePauseInput').value = gc.rateLimitPauseSec||5;
     document.getElementById('gcalAutoSyncToggle').checked = gc.autoSync!==false;
     document.getElementById('gcalPullToggle').checked = gc.pullEnabled!==false;
     document.getElementById('btnGcalSyncNow').disabled = gcalSyncInProgress;
@@ -2791,6 +2844,18 @@ document.getElementById('gcalWindowInput').addEventListener('change', (e)=>{
   e.target.value = v;
   state.googleCalendar.windowDays = v;
   scheduleSave();
+});
+document.getElementById('gcalRateInput').addEventListener('change', (e)=>{
+  const v = clamp(parseInt(e.target.value,10)||0, 0, 100);
+  e.target.value = v;
+  state.googleCalendar.itemsPerSecond = v;
+  persistState();
+});
+document.getElementById('gcalRatePauseInput').addEventListener('change', (e)=>{
+  const v = clamp(parseInt(e.target.value,10)||5, 1, 300);
+  e.target.value = v;
+  state.googleCalendar.rateLimitPauseSec = v;
+  persistState();
 });
 document.getElementById('gcalAutoSyncToggle').addEventListener('change', (e)=>{
   state.googleCalendar.autoSync = e.target.checked;
