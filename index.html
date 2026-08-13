@@ -2664,6 +2664,7 @@ function buildSchoolDayEventBody(dateStr, startTime, endTime){
     description: 'Flightpath school day — first class start to last class end\n\n(Managed by Flightpath — edits made here may be overwritten on the next sync.)',
     start: { dateTime: toGcalDateTime(dateStr, startTime) },
     end: { dateTime: toGcalDateTime(dateStr, endTime) },
+    colorId: '10', // Basil — Google Calendar's standard green
     extendedProperties: { private: { flightpathManaged:'true', flightpathType:'school-day', flightpathId:'school_'+dateStr } }
   };
 }
