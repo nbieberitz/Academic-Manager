@@ -705,9 +705,6 @@
               </div>
             </div>
             <div class="field-row" style="max-width:420px;margin-top:12px;">
-              <div class="field"><label>Sync this many days ahead</label><input type="number" id="gcalWindowInput" min="7" max="90" value="30"></div>
-            </div>
-            <div class="field-row" style="max-width:420px;">
               <div class="field"><label>Items synced per second</label><input type="number" id="gcalRateInput" min="0" max="100" value="0"></div>
               <div class="field"><label>Pause when rate-limited (sec)</label><input type="number" id="gcalRatePauseInput" min="1" max="300" value="5"></div>
             </div>
@@ -716,10 +713,9 @@
             <label class="check-label" style="margin-bottom:14px;"><input type="checkbox" id="gcalPullToggle" checked> Show my other Google Calendar events here</label>
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
               <button class="btn btn-primary btn-sm" id="btnGcalSyncNow">Sync now</button>
-              <button class="btn btn-ghost btn-sm" id="btnGcalSyncFullYear">Sync entire school year</button>
               <button class="btn btn-ghost btn-sm" id="btnGcalDisconnect">Disconnect</button>
             </div>
-            <p class="hint" style="margin-top:8px;margin-bottom:0;">"Sync entire school year" pushes School blocks for every school day between the first and last day set above, instead of just the window below. Handy right after connecting, or after changing your school year dates.</p>
+            <p class="hint" style="margin-top:8px;margin-bottom:0;">Needs a first and last day of school set above — each sync pushes School blocks and assignments, and pulls in your other events, across that whole range.</p>
           </div>
         </div>
         <div class="settings-section" style="margin-bottom:0;">
@@ -984,7 +980,7 @@ function isGcalConfigured(){
   return typeof GOOGLE_CALENDAR_CLIENT_ID==='string' && !!GOOGLE_CALENDAR_CLIENT_ID && !GOOGLE_CALENDAR_CLIENT_ID.includes('YOUR_CLIENT_ID');
 }
 function defaultGcalState(){
-  return { connected:false, autoSync:true, pullEnabled:true, windowDays:30, itemsPerSecond:0, rateLimitPauseSec:5, eventMap:{}, externalEvents:[], lastSyncedAt:null, lastSyncStatus:null, lastSyncError:null };
+  return { connected:false, autoSync:true, pullEnabled:true, itemsPerSecond:0, rateLimitPauseSec:5, eventMap:{}, externalEvents:[], lastSyncedAt:null, lastSyncStatus:null, lastSyncError:null };
 }
 
 /* ===================== helpers ===================== */
@@ -2673,7 +2669,7 @@ function buildSchoolDayEventBody(dateStr, startTime, endTime){
 }
 function gcalEventSig(body){ return body.summary+'|'+body.start.dateTime+'|'+body.end.dateTime+'|'+(body.colorId||''); }
 
-function buildDesiredGcalItems(opts){
+function buildDesiredGcalItems(){
   const cmap = classesMap();
   const items = {};
   state.assignments.forEach(a=>{
@@ -2681,17 +2677,11 @@ function buildDesiredGcalItems(opts){
     const body = buildAssignmentEventBody(a, cmap);
     items[a.id] = { body, sig: gcalEventSig(body) };
   });
-  const today = new Date(); today.setHours(0,0,0,0);
   const sy = state.schoolYear || {};
-  let rangeStart = today, rangeEnd;
-  if(opts && opts.fullSchoolYear && sy.startDate && sy.endDate){
-    // Whole configured school year, past and future — used by "Sync entire school year".
-    rangeStart = new Date(sy.startDate+'T00:00:00');
-    rangeEnd = new Date(sy.endDate+'T00:00:00');
-  } else {
-    const days = clamp(parseInt(state.googleCalendar.windowDays,10)||30, 7, 90);
-    rangeEnd = new Date(today); rangeEnd.setDate(rangeEnd.getDate()+days-1);
-  }
+  // Whole configured school year, past and future. runCalendarSync already
+  // confirmed both dates are set before calling in here.
+  const rangeStart = new Date(sy.startDate+'T00:00:00');
+  const rangeEnd = new Date(sy.endDate+'T00:00:00');
   for(let d=new Date(rangeStart); d<=rangeEnd; d.setDate(d.getDate()+1)){
     const dStr = dateKey(d);
     const dayClasses = classesOnDate(dStr);
@@ -2709,7 +2699,6 @@ function buildDesiredGcalItems(opts){
 /* ===================== Google Calendar: sync ===================== */
 let gcalSyncInProgress = false;
 let gcalSyncQueued = false;
-let gcalQueuedOpts = null;
 let gcalProgressText = '';
 
 function updateGcalProgress(done, total){
@@ -2771,12 +2760,12 @@ function externalEventsOnDate(dateStr){
 
 async function pullExternalGcalEvents(){
   if(!state.googleCalendar.pullEnabled){ state.googleCalendar.externalEvents = []; return; }
-  const days = clamp(parseInt(state.googleCalendar.windowDays,10)||30, 7, 90);
-  const today = new Date(); today.setHours(0,0,0,0);
-  const end = new Date(today); end.setDate(end.getDate()+days);
+  const sy = state.schoolYear || {};
+  const start = new Date(sy.startDate+'T00:00:00');
+  const end = new Date(sy.endDate+'T00:00:00'); end.setDate(end.getDate()+1); // include the whole last day
   let items = [], pageToken = null;
   do{
-    const params = new URLSearchParams({ timeMin: today.toISOString(), timeMax: end.toISOString(), singleEvents:'true', orderBy:'startTime', maxResults:'250' });
+    const params = new URLSearchParams({ timeMin: start.toISOString(), timeMax: end.toISOString(), singleEvents:'true', orderBy:'startTime', maxResults:'250' });
     if(pageToken) params.set('pageToken', pageToken);
     const res = await withRateLimitRetry(()=>gcalFetch('/calendars/primary/events?'+params.toString(), {method:'GET'}, true));
     items = items.concat(res.items||[]);
@@ -2795,10 +2784,9 @@ async function pullExternalGcalEvents(){
     }));
 }
 
-async function runCalendarSync(interactive, opts){
+async function runCalendarSync(interactive){
   if(gcalSyncInProgress){
     gcalSyncQueued = true;
-    if(opts && opts.fullSchoolYear) gcalQueuedOpts = {fullSchoolYear:true};
     return;
   }
   if(!isGcalConfigured()){
@@ -2806,11 +2794,20 @@ async function runCalendarSync(interactive, opts){
     return;
   }
   if(!state.googleCalendar.connected) return;
+  const sy = state.schoolYear || {};
+  if(!sy.startDate || !sy.endDate){
+    if(interactive) showToast('Set both a first and last day of school in the School year section above before syncing.');
+    return;
+  }
+  if(sy.endDate < sy.startDate){
+    if(interactive) showToast('Last day of school is before the first day — fix the School year dates above first.');
+    return;
+  }
   gcalSyncInProgress = true;
   renderGcalSettings();
   try{
     await getValidGcalToken(interactive);
-    const desired = buildDesiredGcalItems(opts);
+    const desired = buildDesiredGcalItems();
     await applyGcalDiff(desired);
     await pullExternalGcalEvents();
     state.googleCalendar.lastSyncedAt = Date.now();
@@ -2829,8 +2826,7 @@ async function runCalendarSync(interactive, opts){
   renderCalendar();
   if(gcalSyncQueued){
     gcalSyncQueued = false;
-    const queuedOpts = gcalQueuedOpts; gcalQueuedOpts = null;
-    runCalendarSync(false, queuedOpts);
+    runCalendarSync(false);
   }
 }
 
@@ -2875,13 +2871,11 @@ function renderGcalSettings(){
       detailEl.style.color = '';
     }
     detailEl.textContent = detail;
-    document.getElementById('gcalWindowInput').value = gc.windowDays||30;
     document.getElementById('gcalRateInput').value = gc.itemsPerSecond||0;
     document.getElementById('gcalRatePauseInput').value = gc.rateLimitPauseSec||5;
     document.getElementById('gcalAutoSyncToggle').checked = gc.autoSync!==false;
     document.getElementById('gcalPullToggle').checked = gc.pullEnabled!==false;
     document.getElementById('btnGcalSyncNow').disabled = gcalSyncInProgress;
-    document.getElementById('btnGcalSyncFullYear').disabled = gcalSyncInProgress;
   }
 }
 
@@ -2898,18 +2892,6 @@ document.getElementById('btnGcalConnect').addEventListener('click', async ()=>{
   }
 });
 document.getElementById('btnGcalSyncNow').addEventListener('click', ()=>runCalendarSync(true));
-document.getElementById('btnGcalSyncFullYear').addEventListener('click', ()=>{
-  const sy = state.schoolYear || {};
-  if(!sy.startDate || !sy.endDate){
-    showToast('Set both a first and last day of school in the School year section above before syncing the whole year.');
-    return;
-  }
-  if(sy.endDate < sy.startDate){
-    showToast('Last day of school is before the first day — fix the School year dates above first.');
-    return;
-  }
-  runCalendarSync(true, {fullSchoolYear:true});
-});
 document.getElementById('btnGcalDisconnect').addEventListener('click', ()=>{
   document.getElementById('confirmTitle').textContent = 'Disconnect Google Calendar?';
   document.getElementById('confirmBody').textContent = 'Flightpath will stop syncing. Events already created in Google Calendar are left as-is — reconnecting later will pick right back up without duplicating them.';
@@ -2923,12 +2905,6 @@ document.getElementById('btnGcalDisconnect').addEventListener('click', ()=>{
     showToast('Google Calendar disconnected');
   };
   openOverlay('overlayConfirm');
-});
-document.getElementById('gcalWindowInput').addEventListener('change', (e)=>{
-  const v = clamp(parseInt(e.target.value,10)||30, 7, 90);
-  e.target.value = v;
-  state.googleCalendar.windowDays = v;
-  scheduleSave();
 });
 document.getElementById('gcalRateInput').addEventListener('change', (e)=>{
   const v = clamp(parseInt(e.target.value,10)||0, 0, 100);
