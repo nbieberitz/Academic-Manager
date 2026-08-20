@@ -1363,6 +1363,16 @@ function tierForIndex(i, total){
   return '';
 }
 
+// Completed assignments sort most-recently-completed first from here on out.
+// Ones already marked done before this tracking existed have no completedAt,
+// so they fall back to due date instead — most recent due date first, farthest
+// back due date last. Any real completedAt (i.e. completed from now on) always
+// outranks a fallback-sorted legacy one, since it's necessarily more recent.
+function completedCompare(a, b){
+  if(a.completedAt && b.completedAt) return b.completedAt - a.completedAt;
+  if(!!a.completedAt !== !!b.completedAt) return a.completedAt ? -1 : 1;
+  return (b.dueDate||'').localeCompare(a.dueDate||'');
+}
 function renderAssignments(){
   const list = document.getElementById('assignmentList');
   const emptyEl = document.getElementById('assignEmpty');
@@ -1397,11 +1407,13 @@ function renderAssignments(){
   if(state.ui.sort==='priority'){
     items.sort((a,b)=>{
       if(!!a.completed !== !!b.completed) return a.completed?1:-1;
+      if(a.completed) return completedCompare(a,b);
       return a.priorityRank-b.priorityRank;
     });
   } else {
     items.sort((a,b)=>{
       if(!!a.completed !== !!b.completed) return a.completed?1:-1;
+      if(a.completed) return completedCompare(a,b);
       const da = new Date(a.dueDate+'T'+assignmentDueTimeStr(a,cmap));
       const db = new Date(b.dueDate+'T'+assignmentDueTimeStr(b,cmap));
       return da-db;
@@ -2510,6 +2522,7 @@ document.getElementById('btnDeleteAssignment').addEventListener('click', ()=>{
 function toggleComplete(id){
   const a = byId(state.assignments, id);
   a.completed = !a.completed;
+  a.completedAt = a.completed ? Date.now() : null;
   scheduleSave(); render();
 }
 
