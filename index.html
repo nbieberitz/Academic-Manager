@@ -2948,6 +2948,11 @@ async function loadAppForUser(){
   document.getElementById('showCompleted').checked = !!state.ui.showCompleted;
   document.querySelectorAll('#sortSeg button').forEach(b=>b.classList.toggle('active', b.dataset.sort===(state.ui.sort||'priority')));
   render();
+  // Warm up the connection right away, in the background, instead of waiting
+  // for your first edit of the session to trigger it a few seconds later.
+  if(state.googleCalendar && state.googleCalendar.connected && state.googleCalendar.autoSync!==false){
+    runCalendarSync(false);
+  }
 }
 
 document.getElementById('btnGoogleSignIn').addEventListener('click', async ()=>{
