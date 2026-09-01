@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Flightpath — Assignment Control</title>
+<title>Academic Manager — Assignment Control</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23F2A93B' d='M2 16l20-8-8 20-3-8-9-4z'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -457,7 +457,7 @@
 <div class="signin-screen" id="signinScreen">
   <div class="signin-card">
     <svg class="brand-mark" width="32" height="32" viewBox="0 0 24 24"><path fill="var(--amber)" d="M2 16l20-8-8 20-3-8-9-4z"/></svg>
-    <h1>Flightpath</h1>
+    <h1>Academic Manager</h1>
     <p>Sign in with Google to access your assignments. Your data syncs to your account.</p>
     <div class="signin-loading" id="signinLoading">Checking sign-in status…</div>
     <button class="btn btn-google" id="btnGoogleSignIn" style="display:none;">
@@ -479,7 +479,7 @@
     <div class="brand">
       <svg width="26" height="26" viewBox="0 0 24 24"><path fill="var(--amber)" d="M2 16l20-8-8 20-3-8-9-4z"/></svg>
       <div class="brand-text">
-        <h1>Flightpath</h1>
+        <h1>Academic Manager</h1>
         <p>Assignment control</p>
       </div>
     </div>
@@ -2658,9 +2658,9 @@ function buildAssignmentEventBody(a, cmap){
   const durMin = (a.estMinutes && a.estMinutes>0) ? a.estMinutes : 15;
   const endISO = new Date(new Date(startISO).getTime() + durMin*60000).toISOString();
   const type = byId(state.types, a.typeId);
-  let desc = 'Flightpath assignment'+(type?' · '+type.name:'');
+  let desc = 'Academic Manager assignment'+(type?' · '+type.name:'');
   if(a.notes) desc += '\n\n'+a.notes;
-  desc += '\n\n(Managed by Flightpath — edits made here may be overwritten on the next sync.)';
+  desc += '\n\n(Managed by Academic Manager — edits made here may be overwritten on the next sync.)';
   const body = {
     summary: (cls?cls.name+': ':'')+a.title,
     description: desc,
@@ -2674,7 +2674,7 @@ function buildAssignmentEventBody(a, cmap){
 function buildSchoolDayEventBody(dateStr, startTime, endTime){
   return {
     summary: 'School',
-    description: 'Flightpath school day — first class start to last class end\n\n(Managed by Flightpath — edits made here may be overwritten on the next sync.)',
+    description: 'Academic Manager school day — first class start to last class end\n\n(Managed by Academic Manager — edits made here may be overwritten on the next sync.)',
     start: { dateTime: toGcalDateTime(dateStr, startTime) },
     end: { dateTime: toGcalDateTime(dateStr, endTime) },
     colorId: '10', // Basil — Google Calendar's standard green
@@ -2908,7 +2908,7 @@ document.getElementById('btnGcalConnect').addEventListener('click', async ()=>{
 document.getElementById('btnGcalSyncNow').addEventListener('click', ()=>runCalendarSync(true));
 document.getElementById('btnGcalDisconnect').addEventListener('click', ()=>{
   document.getElementById('confirmTitle').textContent = 'Disconnect Google Calendar?';
-  document.getElementById('confirmBody').textContent = 'Flightpath will stop syncing. Events already created in Google Calendar are left as-is — reconnecting later will pick right back up without duplicating them.';
+  document.getElementById('confirmBody').textContent = 'Academic Manager will stop syncing. Events already created in Google Calendar are left as-is — reconnecting later will pick right back up without duplicating them.';
   document.getElementById('confirmActionBtn').onclick = ()=>{
     if(gcalAccessToken){ try{ google.accounts.oauth2.revoke(gcalAccessToken, ()=>{}); }catch(e){} }
     gcalAccessToken = null; gcalTokenExpiresAt = 0;
