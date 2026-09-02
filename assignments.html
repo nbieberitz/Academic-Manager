@@ -598,57 +598,6 @@
 
       <div class="card">
         <div class="settings-section">
-          <h3>School year</h3>
-          <p class="settings-desc">Classes only appear on the calendar between these dates, on whichever days you've assigned them. Leave blank to show classes indefinitely.</p>
-          <div class="field-row" style="max-width:420px;">
-            <div class="field"><label>First day of school</label><input type="date" id="schoolStartInput"></div>
-            <div class="field"><label>Last day of school</label><input type="date" id="schoolEndInput"></div>
-          </div>
-          <p class="hint" id="schoolYearError" style="display:none;color:var(--red);">Last day should be on or after the first day.</p>
-        </div>
-        <div class="settings-section">
-          <h3>Breaks &amp; days off</h3>
-          <p class="settings-desc">Days with no school — holidays, breaks, snow days. Classes and "due in class" are skipped on these dates.</p>
-          <div id="breaksList"></div>
-          <div class="inline-form" id="breakForm">
-            <div class="field-row">
-              <div class="field"><label>Label</label><input type="text" id="breakLabelInput" placeholder="e.g. Thanksgiving Break"></div>
-            </div>
-            <div class="field-row">
-              <div class="field"><label>First day</label><input type="date" id="breakStartInput"></div>
-              <div class="field"><label>Last day</label><input type="date" id="breakEndInput"></div>
-            </div>
-            <div class="form-error" id="breakFormError">Give it a label and a valid date range.</div>
-            <div style="display:flex;gap:10px;">
-              <button class="btn btn-primary btn-sm" id="breakFormSave">Save break</button>
-              <button class="btn btn-ghost btn-sm" id="breakFormCancel">Cancel</button>
-            </div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btnNewBreak">+ Add break</button>
-        </div>
-        <div class="settings-section">
-          <h3>Schedule changes</h3>
-          <p class="settings-desc">One-off days where your classes or times don't match the regular pattern — assemblies, half days, rotating blocks.</p>
-          <div id="scheduleChangeList"></div>
-          <div class="inline-form" id="scheduleChangeForm">
-            <div class="field-row">
-              <div class="field"><label>Date</label><input type="date" id="schedChangeDateInput"></div>
-              <div class="field"><label>Note (optional)</label><input type="text" id="schedChangeNoteInput" placeholder="e.g. Assembly schedule"></div>
-            </div>
-            <div class="field">
-              <label>Classes meeting that day</label>
-              <div id="schedChangePeriods"></div>
-              <p class="hint" id="schedChangeNoClassesHint" style="display:none;margin-top:0;">Add a class first in the Classes tab.</p>
-            </div>
-            <div class="form-error" id="schedChangeFormError">Pick a date, and give every checked class both a start and end time.</div>
-            <div style="display:flex;gap:10px;">
-              <button class="btn btn-primary btn-sm" id="schedChangeFormSave">Save schedule change</button>
-              <button class="btn btn-ghost btn-sm" id="schedChangeFormCancel">Cancel</button>
-            </div>
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" id="btnNewScheduleChange">+ Add schedule change</button>
-        </div>
-        <div class="settings-section">
           <h3>Assignment types</h3>
           <p class="settings-desc">Shown in the type dropdown when logging an assignment.</p>
           <div class="chip-list" id="typeChips"></div>
@@ -665,10 +614,6 @@
             <input type="text" id="newLocationInput" placeholder="e.g. Google Classroom">
             <button class="btn btn-sm" id="addLocationBtn">Add</button>
           </div>
-        </div>
-        <div class="settings-section">
-          <h3>Google Calendar</h3>
-          <p class="settings-desc">Two-way sync with Google Calendar — connect, sync settings, and status — is managed from the <a href="calendar.html">Calendar page</a>.</p>
         </div>
         <div class="settings-section" style="margin-bottom:0;">
           <h3>Data</h3>
@@ -1472,12 +1417,6 @@ function onClassDragEnd(){
 }
 
 function renderSettings(){
-  const sy = state.schoolYear || {startDate:'', endDate:''};
-  document.getElementById('schoolStartInput').value = sy.startDate || '';
-  document.getElementById('schoolEndInput').value = sy.endDate || '';
-  document.getElementById('schoolYearError').style.display =
-    (sy.startDate && sy.endDate && sy.endDate < sy.startDate) ? '' : 'none';
-
   const typeWrap = document.getElementById('typeChips');
   typeWrap.innerHTML = state.types.map(t=>
     '<span class="chip">'+escapeHtml(t.name)+'<button data-del-type="'+t.id+'" title="Remove">×</button></span>'
@@ -1489,242 +1428,6 @@ function renderSettings(){
     '<span class="chip">'+escapeHtml(l.name)+'<button data-del-loc="'+l.id+'" title="Remove">×</button></span>'
   ).join('');
   locWrap.querySelectorAll('[data-del-loc]').forEach(b=>b.addEventListener('click',()=>removeCategory('locations', b.dataset.delLoc)));
-
-  renderBreaksList();
-  renderScheduleChangesList();
-}
-
-/* ===================== settings: breaks & days off ===================== */
-function formatDateRangeShort(s,e){
-  if(!e || e===s) return formatDateShort(s);
-  return formatDateShort(s)+' – '+formatDateShort(e);
-}
-function renderBreaksList(){
-  const wrap = document.getElementById('breaksList');
-  const breaks = (state.breaks||[]).slice().sort((a,b)=>a.startDate.localeCompare(b.startDate));
-  if(!breaks.length){
-    wrap.innerHTML = '<p class="hint" style="margin:0 0 10px;">No breaks added yet.</p>';
-    return;
-  }
-  wrap.innerHTML = breaks.map(b=>
-    '<div class="day-class-row" data-id="'+b.id+'">'+
-      '<span class="dot" style="background:var(--red);color:var(--red);"></span>'+
-      '<div class="class-row-main">'+
-        '<span class="class-name">'+escapeHtml(b.label||'Day off')+'</span>'+
-        '<div class="class-block-line mono">'+escapeHtml(formatDateRangeShort(b.startDate,b.endDate))+'</div>'+
-      '</div>'+
-      '<div class="class-actions">'+
-        '<button class="icon-btn" data-edit-break="'+b.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>'+
-        '<button class="icon-btn danger" data-del-break="'+b.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>'+
-      '</div>'+
-    '</div>'
-  ).join('');
-  wrap.querySelectorAll('[data-edit-break]').forEach(btn=>btn.addEventListener('click',()=>openBreakForm(btn.dataset.editBreak)));
-  wrap.querySelectorAll('[data-del-break]').forEach(btn=>btn.addEventListener('click',()=>deleteBreak(btn.dataset.delBreak)));
-}
-let editingBreakId = null;
-function openBreakForm(editId){
-  editingBreakId = editId || null;
-  document.getElementById('breakForm').classList.add('open');
-  document.getElementById('breakFormError').classList.remove('show');
-  if(editId){
-    const b = byId(state.breaks, editId);
-    document.getElementById('breakLabelInput').value = b.label||'';
-    document.getElementById('breakStartInput').value = b.startDate||'';
-    document.getElementById('breakEndInput').value = b.endDate||'';
-  } else {
-    document.getElementById('breakLabelInput').value = '';
-    document.getElementById('breakStartInput').value = '';
-    document.getElementById('breakEndInput').value = '';
-  }
-  document.getElementById('breakLabelInput').focus();
-}
-function closeBreakForm(){
-  document.getElementById('breakForm').classList.remove('open');
-  editingBreakId = null;
-}
-document.getElementById('btnNewBreak').addEventListener('click', ()=>openBreakForm(null));
-document.getElementById('breakFormCancel').addEventListener('click', closeBreakForm);
-document.getElementById('breakFormSave').addEventListener('click', ()=>{
-  const label = document.getElementById('breakLabelInput').value.trim();
-  const start = document.getElementById('breakStartInput').value;
-  const end = document.getElementById('breakEndInput').value || start;
-  const errEl = document.getElementById('breakFormError');
-  if(!label || !start || (end && end<start)){
-    errEl.textContent = !label ? 'Give the break a label.' : !start ? 'Pick at least a first day.' : "Last day can't be before the first day.";
-    errEl.classList.add('show');
-    return;
-  }
-  errEl.classList.remove('show');
-  if(!state.breaks) state.breaks = [];
-  if(editingBreakId){
-    const b = byId(state.breaks, editingBreakId);
-    b.label=label; b.startDate=start; b.endDate=end;
-    showToast('Break updated');
-  } else {
-    state.breaks.push({id:uid(), label, startDate:start, endDate:end});
-    showToast('Break added');
-  }
-  closeBreakForm();
-  scheduleSave(); render();
-});
-function deleteBreak(id){
-  state.breaks = (state.breaks||[]).filter(x=>x.id!==id);
-  scheduleSave(); render();
-  showToast('Break removed');
-}
-
-/* ===================== settings: schedule changes ===================== */
-function renderScheduleChangesList(){
-  const wrap = document.getElementById('scheduleChangeList');
-  const cmap = classesMap();
-  const changes = (state.scheduleChanges||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
-  if(!changes.length){
-    wrap.innerHTML = '<p class="hint" style="margin:0 0 10px;">No schedule changes added yet.</p>';
-    return;
-  }
-  wrap.innerHTML = changes.map(s=>{
-    const names = s.periods.map(p=>cmap[p.classId]?cmap[p.classId].name:null).filter(Boolean);
-    const summary = names.length ? names.join(', ') : 'No classes meet';
-    return '<div class="day-class-row" data-id="'+s.id+'">'+
-      '<span class="dot" style="background:var(--purple);color:var(--purple);"></span>'+
-      '<div class="class-row-main">'+
-        '<span class="class-name">'+escapeHtml(formatDateShort(s.date))+(s.note?' — '+escapeHtml(s.note):'')+'</span>'+
-        '<div class="class-block-line">'+escapeHtml(summary)+'</div>'+
-      '</div>'+
-      '<div class="class-actions">'+
-        '<button class="icon-btn" data-edit-sched="'+s.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>'+
-        '<button class="icon-btn danger" data-del-sched="'+s.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg></button>'+
-      '</div>'+
-    '</div>';
-  }).join('');
-  wrap.querySelectorAll('[data-edit-sched]').forEach(btn=>btn.addEventListener('click',()=>openScheduleChangeForm(btn.dataset.editSched)));
-  wrap.querySelectorAll('[data-del-sched]').forEach(btn=>btn.addEventListener('click',()=>deleteScheduleChange(btn.dataset.delSched)));
-}
-let editingScheduleChangeId = null;
-let schedChangePeriods = [];
-function renderSchedChangePeriods(){
-  const wrap = document.getElementById('schedChangePeriods');
-  const hint = document.getElementById('schedChangeNoClassesHint');
-  if(!state.classes.length){
-    wrap.innerHTML = '';
-    hint.style.display = '';
-    return;
-  }
-  hint.style.display = 'none';
-  wrap.innerHTML = schedChangePeriods.map((p,i)=>{
-    const cls = byId(state.classes, p.classId);
-    if(!cls) return '';
-    return '<div class="period-block" data-idx="'+i+'">'+
-      '<div class="period-block-head">'+
-        '<label class="check-label"><input type="checkbox" class="sched-meets" data-idx="'+i+'"'+(p.meets?' checked':'')+'>'+
-          '<span class="dot" style="background:'+cls.color+';color:'+cls.color+';margin-top:0;"></span>'+escapeHtml(cls.name)+
-        '</label>'+
-      '</div>'+
-      (p.meets ? '<div class="period-time-row">'+
-        '<div class="field" style="margin-bottom:0;"><label>Starts</label><input type="time" class="sched-start" data-idx="'+i+'" value="'+(p.startTime||'')+'"></div>'+
-        '<div class="field" style="margin-bottom:0;"><label>Ends</label><input type="time" class="sched-end" data-idx="'+i+'" value="'+(p.endTime||'')+'"></div>'+
-      '</div>' : '')+
-    '</div>';
-  }).join('');
-
-  wrap.querySelectorAll('.sched-meets').forEach(cb=>{
-    cb.addEventListener('change', ()=>{
-      const idx = +cb.dataset.idx;
-      const entry = schedChangePeriods[idx];
-      entry.meets = cb.checked;
-      if(cb.checked && !entry.startTime){
-        const dateVal = document.getElementById('schedChangeDateInput').value;
-        const cls = byId(state.classes, entry.classId);
-        const per = (dateVal && cls) ? periodForDayKey(cls, dateKeyDowKey(dateVal)) : null;
-        if(per){ entry.startTime = per.startTime; entry.endTime = per.endTime; }
-      }
-      renderSchedChangePeriods();
-    });
-  });
-  wrap.querySelectorAll('.sched-start').forEach(inp=>{
-    inp.addEventListener('change', ()=>{ schedChangePeriods[+inp.dataset.idx].startTime = inp.value; });
-  });
-  wrap.querySelectorAll('.sched-end').forEach(inp=>{
-    inp.addEventListener('change', ()=>{ schedChangePeriods[+inp.dataset.idx].endTime = inp.value; });
-  });
-}
-function openScheduleChangeForm(editId){
-  editingScheduleChangeId = editId || null;
-  document.getElementById('scheduleChangeForm').classList.add('open');
-  document.getElementById('schedChangeFormError').classList.remove('show');
-  if(editId){
-    const s = byId(state.scheduleChanges, editId);
-    document.getElementById('schedChangeDateInput').value = s.date||'';
-    document.getElementById('schedChangeNoteInput').value = s.note||'';
-    schedChangePeriods = state.classes.map(c=>{
-      const existing = s.periods.find(p=>p.classId===c.id);
-      return {classId:c.id, meets: !!existing, startTime: existing?existing.startTime:'', endTime: existing?existing.endTime:''};
-    });
-  } else {
-    document.getElementById('schedChangeDateInput').value = '';
-    document.getElementById('schedChangeNoteInput').value = '';
-    schedChangePeriods = state.classes.map(c=>({classId:c.id, meets:false, startTime:'', endTime:''}));
-  }
-  renderSchedChangePeriods();
-  document.getElementById('schedChangeDateInput').focus();
-}
-function closeScheduleChangeForm(){
-  document.getElementById('scheduleChangeForm').classList.remove('open');
-  editingScheduleChangeId = null;
-  schedChangePeriods = [];
-}
-document.getElementById('btnNewScheduleChange').addEventListener('click', ()=>{
-  if(!state.classes.length){ showToast('Add a class first'); return; }
-  openScheduleChangeForm(null);
-});
-document.getElementById('schedChangeFormCancel').addEventListener('click', closeScheduleChangeForm);
-document.getElementById('schedChangeDateInput').addEventListener('change', (e)=>{
-  const dateVal = e.target.value;
-  schedChangePeriods.forEach(p=>{
-    if(p.meets && !p.startTime){
-      const cls = byId(state.classes, p.classId);
-      const per = (dateVal && cls) ? periodForDayKey(cls, dateKeyDowKey(dateVal)) : null;
-      if(per){ p.startTime = per.startTime; p.endTime = per.endTime; }
-    }
-  });
-  renderSchedChangePeriods();
-});
-document.getElementById('schedChangeFormSave').addEventListener('click', ()=>{
-  const date = document.getElementById('schedChangeDateInput').value;
-  const note = document.getElementById('schedChangeNoteInput').value.trim();
-  const errEl = document.getElementById('schedChangeFormError');
-  const meeting = schedChangePeriods.filter(p=>p.meets);
-  const allValid = meeting.every(p=>p.startTime && p.endTime);
-  if(!date || !allValid){
-    errEl.textContent = !date ? 'Pick a date.' : 'Every checked class needs both a start and end time.';
-    errEl.classList.add('show');
-    return;
-  }
-  if(!state.scheduleChanges) state.scheduleChanges = [];
-  const dup = state.scheduleChanges.find(s=>s.date===date && s.id!==editingScheduleChangeId);
-  if(dup){
-    errEl.textContent = "There's already a schedule change for that date — edit it instead of adding a new one.";
-    errEl.classList.add('show');
-    return;
-  }
-  errEl.classList.remove('show');
-  const periods = meeting.map(p=>({classId:p.classId, startTime:p.startTime, endTime:p.endTime}));
-  if(editingScheduleChangeId){
-    const s = byId(state.scheduleChanges, editingScheduleChangeId);
-    s.date=date; s.note=note; s.periods=periods;
-    showToast('Schedule change updated');
-  } else {
-    state.scheduleChanges.push({id:uid(), date, note, periods});
-    showToast('Schedule change added');
-  }
-  closeScheduleChangeForm();
-  scheduleSave(); render();
-});
-function deleteScheduleChange(id){
-  state.scheduleChanges = (state.scheduleChanges||[]).filter(x=>x.id!==id);
-  scheduleSave(); render();
-  showToast('Schedule change removed');
 }
 
 function removeCategory(kind, id){
@@ -1917,18 +1620,6 @@ function confirmDeleteClass(id){
   };
   openOverlay('overlayConfirm');
 }
-
-/* ===================== settings: school year ===================== */
-document.getElementById('schoolStartInput').addEventListener('change', (e)=>{
-  if(!state.schoolYear) state.schoolYear = {startDate:'', endDate:''};
-  state.schoolYear.startDate = e.target.value;
-  scheduleSave(); renderSettings();
-});
-document.getElementById('schoolEndInput').addEventListener('change', (e)=>{
-  if(!state.schoolYear) state.schoolYear = {startDate:'', endDate:''};
-  state.schoolYear.endDate = e.target.value;
-  scheduleSave(); renderSettings();
-});
 
 /* ===================== settings: add type/location ===================== */
 document.getElementById('addTypeBtn').addEventListener('click', ()=>{
